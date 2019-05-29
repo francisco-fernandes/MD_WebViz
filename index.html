@@ -1,0 +1,3206 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>Protein Visualization Test</title>
+	<style>
+		body { background-color: black; color: white; margin: 0px; overflow: hidden; cursor: move; }
+		#info { color: white; border: 1px white; opacity: 0.8; position: absolute; text-align: center; z-index: 100; display: none;
+			text-shadow: -1px 0px black, 1px 0px black, 0px -1px black, 0px 1px black; }
+		#dropzone { width: 50%; height: 50%; margin: auto; color: white; font-family: sans-serif; border: 10px dashed grey; text-align: center; z-index: 1; }
+	</style>
+
+	<script>var version = "0.8";</script>
+	<script src="js/three.min.js"></script>
+	<script src="js/TrackballControls.js"></script>
+	<script src='js/dat.gui.min.js'></script>
+	<!-- <script src="data.js"></script> -->
+	<script>
+		var elementProperties = {
+			"H": {name: "Hydrogen", radius: 1.20, color: 0xffffff },
+			"C": {name: "Carbon"  , radius: 1.70, color: 0x444444 },
+			"N": {name: "Nitrogen", radius: 1.55, color: 0x0000ff },
+			"O": {name: "Oxygen"  , radius: 1.52, color: 0xff0000 },
+			"S": {name: "Sulfur"  , radius: 1.80, color: 0xffff00 },
+ 			// only for testing purposes with radius = 1.0
+			"X": {name: "Testing" , radius: 1.00, color: 0xff00ff },
+			"Y": {name: "Testing" , radius: 1.00, color: 0x00ffff },
+			"Z": {name: "Testing" , radius: 1.00, color: 0x00ff00 }
+		};
+		var fileInfo = "";
+		var pdbAtoms = [];
+		var numPdbAtoms = 0;
+		var minCoords = [];
+		var maxCoords = [];
+		var closestAtomsArray = null; // closestAtomsArray[6][numPdbAtoms]
+		var initialPointSize = 1.0;
+	</script>
+	<!-- <script src="code.js"></script> -->
+
+	<script id="vertexShader" type="x-shader/x-vertex">
+		precision mediump float;
+
+		/*
+		// List of all uniforms and attributes predefined by THREE.js:
+		uniform mat4 modelMatrix;
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+		uniform mat4 viewMatrix;
+		uniform mat3 normalMatrix;
+		uniform vec3 cameraPosition;
+		attribute vec3 position;
+		attribute vec3 normal;
+		attribute vec2 uv;
+		attribute vec3 color;
+		*/
+
+		attribute vec3 position;
+		attribute vec3 normal;
+		//attribute vec2 uv;
+		
+		uniform mat4 viewMatrix;
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+		
+		varying vec3 vNormal;
+		//varying vec3 vPos;
+		//varying vec2 vUv;
+
+		void main()	{
+			vNormal = (viewMatrix * vec4( normal, 1.0 )).xyz;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+			//out float gl_PointSize;
+		}
+	</script>
+
+	<script id="fragmentShader" type="x-shader/x-fragment">
+		precision mediump float;
+
+		//uniform mat4 viewMatrix;
+		//uniform vec3 cameraPosition;
+
+		varying vec3 vNormal;
+
+		void main()	{
+			//in vec2 gl_PointCoord;
+			//float depth = (2.0 * gl_FragCoord.z - gl_DepthRange.near - gl_DepthRange.far) / (gl_DepthRange.far - gl_DepthRange.near);
+			//float depth = 1.0 - smoothstep( gl_DepthRange.near , gl_DepthRange.far , gl_FragCoord.z / gl_FragCoord.w );
+			float depth = 1.0 - (gl_FragCoord.z - gl_DepthRange.near) / (gl_DepthRange.far - gl_DepthRange.near);
+			depth = depth / gl_FragCoord.w;
+			gl_FragColor = vec4(vec3(depth), 1.0);
+		}
+	</script>
+
+	<script id="pointVertexShader" type="x-shader/x-vertex">
+		precision mediump float;
+
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+		//uniform vec3 cameraPosition;
+		uniform float sizeMult;
+		
+		//attribute vec3 normal;
+		//attribute vec2 uv;
+
+		attribute vec3 position;
+		attribute vec3 color;
+		attribute float size;
+
+		//varying vec3 vPosition;
+		varying vec4 vColor;
+		varying float normDepth;
+		
+		void main() {
+			//vPosition = position;
+			vColor = vec4( color, 1.0 );
+			vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+			gl_PointSize = ( sizeMult * (2.0*size) * POINT_SIZE_WEIGHT ) / (-mvPosition.z);
+			gl_Position = projectionMatrix * mvPosition;
+			//float depthRange = (gl_DepthRange.far - gl_DepthRange.near);
+			//distToCamera = (-mvPosition.z) / depthRange;
+			//distToCamera = gl_Position.w / depthRange;
+			//normDepth = 1.0 - (gl_Position.z / gl_Position.w);
+			//normDepth = 1.0 - ((-mvPosition.z) - 1.0) / 100.0;
+			normDepth = fract(abs(gl_Position.z / gl_Position.w));
+		}
+	</script>
+
+	<script id="pointFragmentShader" type="x-shader/x-fragment">
+		precision mediump float;
+
+		//uniform float time;
+		uniform sampler2D texture;
+		//uniform vec3 cameraPosition;
+		
+		//varying vec3 vPosition;
+		varying vec4 vColor;
+		varying float normDepth;
+
+		void main() {
+			gl_FragColor = vColor * texture2D( texture, gl_PointCoord );
+			if( length(gl_FragColor.xyz) < 0.01) discard;
+			//gl_FragColor = vec4( vec3( normDepth ), 1.0 );
+		}
+	</script>
+	
+	<script id="debugVS" type="x-shader/x-vertex">
+		precision highp float;
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+		/*
+		// Variables replaced as 'define's
+		uniform float cameraNear;
+		uniform float cameraFar;
+		uniform float fieldOfView;
+		uniform vec2 resolution;
+		uniform vec3 rangeMin;
+		uniform vec3 rangeMax;
+		uniform float numAtoms;
+		*/
+		uniform vec3 cameraFront;
+		uniform vec3 cameraRight;
+		uniform vec3 cameraUp;
+		uniform float sizeMult;
+		attribute vec3 position;
+		attribute float id;
+		varying float vId;
+		varying float vDepth;
+		varying vec3 vPos;
+		varying vec3 vMvPos;
+		varying vec3 cameraPos;
+		varying vec4 vPosColor;
+		varying vec4 vIdColor;
+		varying vec4 vTestColor;
+		varying float vSphereDepthChange;
+		varying vec3 rightVector;
+		varying vec3 upVector;
+		varying vec3 backVector;
+		varying float pointSize;
+		//varying vec4 vVertexIdColor;
+		
+		/*
+		// NOTE: neither structs nor arrays of structs can be used as 'varying's
+		struct nearAtom {
+			float id[6];
+			float type[6];
+			float dist[6];
+			vec3 coords[6];
+		};
+		varying nearAtom nearAtoms;
+		*/
+		
+		varying float nearAtomsIds[6];
+		varying float nearAtomsTypes[6];
+		varying vec3 nearAtomsCoords[6];
+		//varying float nearAtomsDists[6];
+		varying vec4 nearAtomsColors[6];
+		
+		uniform sampler2D tAtomsCoords;
+		uniform sampler2D tNearAtoms;
+		
+		vec4 idToColor(in float i, in float n){
+			/*
+			const int  full[6] =   int[6](  0 ,  1 ,  1 ,  2 ,  2 ,  0 ); // 6: R+G , G-R , G+B , B-G , B+R , R-B
+			const int   var[6] =   int[6](  1 ,  0 ,  2 ,  1 ,  0 ,  2 ); // R=0, G=1, B=2
+			const float sub[6] = float[6]( 0.0, 1.0, 0.0, 1.0, 0.0, 1.0); // array[ full ] = 1.0
+			const float sig[6] = float[6](+1.0,-1.0,+1.0,-1.0,+1.0,-1.0); // array[ variable ] = subtract + signal * x
+			*/
+			float m = (n / 6.0);
+			int s = int(floor( i / m ));
+			float k = (i - (float(s) * m)) / m ;
+			vec4 color = vec4(0.0);
+			if( s == 0 ){
+				color[0] = 1.0;
+				color[1] = k;
+			} else if ( s == 1 ){
+				color[1] = 1.0;
+				color[0] = 1.0 - k;
+			} else if ( s == 2 ){
+				color[1] = 1.0;
+				color[2] = k;
+			} else if ( s == 3 ){
+				color[2] = 1.0;
+				color[1] = 1.0 - k;
+			} else if ( s == 4 ){
+				color[2] = 1.0;
+				color[0] = k;
+			} else if ( s == 5 ){
+				color[0] = 1.0;
+				color[2] = 1.0 - k;
+			}
+			color[3] = 1.0;
+			return color;
+		}
+
+		// TODO: when using real atom's radius, replace "nearAtomsColors[i].a" by correct value
+		void getNearAtoms(){
+			vec2 tex2Coord, tex1Coord;
+			float tex2InvDim, tex1InvDim;
+			vec4 tex2Texel;
+			vec4 nearAtomCoords;
+			float nearAtomId, nearAtomDist;
+			tex2InvDim = (1.0 / tex2Dim); // tex1Dim and tex2Dim declared as 'define's
+			tex1InvDim = (1.0 / tex1Dim);
+			
+			/* Get near atoms' ids */
+			float tempId = (id*2.0) + 0.5; // (id*2.0) because 2 texels are allocated for each atom ; (+0.5) otherwise mod(a,b) and floor(a,b) give wrong result when a=b (id*2.0=tex2Dim)
+			tex2Coord = vec2( mod(tempId, tex2Dim) , floor(tempId * tex2InvDim) );
+			tex2Coord.y += 0.5; // +0.5 to fall in the middle of the texel ; uv.x already has the extra +0.5 left by the mod because of the (tempId=id*2+0.5) operation
+			tex2Coord *= tex2InvDim; // to convert to the range [0.0,1.0]
+
+			/* Get the 1st texel (ids of atoms #1, #2, #3) */
+			tex2Texel = texture2D( tNearAtoms, tex2Coord );
+			
+			/* Get coordinates of near atom #1 */
+			nearAtomId = (tex2Texel.x + 0.5);
+			nearAtomsIds[0] = (nearAtomId - 0.5);
+			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
+			tex1Coord.y += 0.5; // +0.5 to fall in the middle of the texel
+			tex1Coord *= tex1InvDim; // to convert to the range [0.0,1.0]
+			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomsCoords[0] = nearAtomCoords.xyz;
+			nearAtomsTypes[0] = nearAtomCoords.w;
+			//nearAtomDist = distance( position, nearAtomCoords.xyz ); // get distance between this point and the center of the near atom
+			//nearAtomsDists[0] = nearAtomDist;
+			nearAtomsColors[0] = idToColor( nearAtomId , numAtoms );
+			nearAtomsColors[0].a = 1.0; // atom radius
+			
+			/* Get coordinates of near atom #2 */
+			nearAtomId = (tex2Texel.y + 0.5);
+			nearAtomsIds[1] = (nearAtomId - 0.5);
+			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
+			tex1Coord.y += 0.5;
+			tex1Coord *= tex1InvDim;
+			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomsCoords[1] = nearAtomCoords.xyz;
+			nearAtomsTypes[1] = nearAtomCoords.w;
+			//nearAtomDist = distance( position, nearAtomCoords.xyz );
+			//nearAtomsDists[1] = nearAtomDist;
+			nearAtomsColors[1] = idToColor( nearAtomId , numAtoms );
+			nearAtomsColors[1].a = 1.0;
+
+			/* Get coordinates of near atom #3 */
+			nearAtomId = (tex2Texel.z + 0.5);
+			nearAtomsIds[2] = (nearAtomId - 0.5);
+			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
+			tex1Coord.y += 0.5;
+			tex1Coord *= tex1InvDim;
+			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomsCoords[2] = nearAtomCoords.xyz;
+			nearAtomsTypes[2] = nearAtomCoords.w;
+			//nearAtomDist = distance( position, nearAtomCoords.xyz );
+			//nearAtomsDists[2] = nearAtomDist;
+			nearAtomsColors[2] = idToColor( nearAtomId , numAtoms );
+			nearAtomsColors[2].a = 1.0;
+
+			/* Get the 2nd texel (ids of atoms #4, #5, #6) */
+			tex2Coord.x += tex2InvDim;
+			tex2Texel = texture2D( tNearAtoms, tex2Coord );
+
+			/* Get coordinates of near atom #4 */
+			nearAtomId = (tex2Texel.x + 0.5);
+			nearAtomsIds[3] = (nearAtomId - 0.5);
+			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
+			tex1Coord.y += 0.5;
+			tex1Coord *= tex1InvDim;
+			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomsCoords[3] = nearAtomCoords.xyz;
+			nearAtomsTypes[3] = nearAtomCoords.w;
+			//nearAtomDist = distance( position, nearAtomCoords.xyz );
+			//nearAtomsDists[3] = nearAtomDist;
+			nearAtomsColors[3] = idToColor( nearAtomId , numAtoms );
+			nearAtomsColors[3].a = 1.0;
+
+			/* Get coordinates of near atom #5 */
+			nearAtomId = (tex2Texel.y + 0.5);
+			nearAtomsIds[4] = (nearAtomId - 0.5);
+			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
+			tex1Coord.y += 0.5;
+			tex1Coord *= tex1InvDim;
+			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomsCoords[4] = nearAtomCoords.xyz;
+			nearAtomsTypes[4] = nearAtomCoords.w;
+			//nearAtomDist = distance( position, nearAtomCoords.xyz );
+			//nearAtomsDists[4] = nearAtomDist;
+			nearAtomsColors[4] = idToColor( nearAtomId , numAtoms );
+			nearAtomsColors[4].a = 1.0;
+			
+			/* Get coordinates of near atom #6 */
+			nearAtomId = (tex2Texel.z + 0.5);
+			nearAtomsIds[5] = (nearAtomId - 0.5);
+			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
+			tex1Coord.y += 0.5;
+			tex1Coord *= tex1InvDim;
+			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomsCoords[5] = nearAtomCoords.xyz;
+			nearAtomsTypes[5] = nearAtomCoords.w;
+			//nearAtomDist = distance( position, nearAtomCoords.xyz );
+			//nearAtomsDists[5] = nearAtomDist;
+			nearAtomsColors[5] = idToColor( nearAtomId , numAtoms );
+			nearAtomsColors[5].a = 1.0;
+		}
+		
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0
+			color /= vec4(255.0);
+			return color;
+		}
+		void main() {
+			vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 ); // get eye/camera coordinates ; camera at (0,0,0) facing -Z axis
+			gl_Position = projectionMatrix * mvPosition;
+			vPos = position;
+			vMvPos = mvPosition.xyz;
+			vId = id;
+
+			/* height_pixels = (y * vertical_resolution) / (2 * z * tan(FoV/2)) */
+			//float heightInPixels = ( 1.0 * resolution.y ) / ( 2.0 * (-mvPosition.z) * tan( radians( fieldOfView * 0.5 ) ) );
+			/* projectionMatrix[1][1] is (1/tan(fov/2)) */
+			float heightInPixels = ( 1.0 * resolution.y * projectionMatrix[1][1] ) / ( 2.0 * (-mvPosition.z) );
+			heightInPixels = heightInPixels * (2.0 * 1.0 * sizeMult); // assuming the default radius of the spheres is 1.0 world units
+			gl_PointSize = heightInPixels; // height of the point quad is 2*radius
+
+			pointSize = gl_PointSize;
+
+			vDepth = 1.0 - ((-mvPosition.z) - cameraNear) / (cameraFar - cameraNear);
+			vPosColor.r = (position.x - rangeMin.x) / (rangeMax.x - rangeMin.x);
+			vPosColor.g = (position.y - rangeMin.y) / (rangeMax.y - rangeMin.y);
+			vPosColor.b = (position.z - rangeMin.z) / (rangeMax.z - rangeMin.z);
+			vPosColor.a = 1.0;
+			vIdColor = idToColor( id , numAtoms );
+
+			getNearAtoms();
+
+			vec4 radius = vec4(0.0, 0.0, 1.0, 0.0) * sizeMult;
+			vec4 elevatedPos = mvPosition + radius; // position elevated towards camera
+			elevatedPos = projectionMatrix * elevatedPos;
+			vSphereDepthChange = (gl_Position.z / gl_Position.w); // between -1.0 (near) and +1.0 (far)
+			vSphereDepthChange -= (elevatedPos.z / elevatedPos.w); // depth value variation between base and elevated positions
+			vSphereDepthChange = vSphereDepthChange * 0.5; // difference now between 0.0 (near) and +1.0 (far)
+			vTestColor = floatToColor( vSphereDepthChange );
+
+			// Get camera vectors
+			rightVector = vec3( modelViewMatrix[0][0], modelViewMatrix[1][0], modelViewMatrix[2][0] ); // 1st line of the ModelView matrix
+			upVector = vec3( modelViewMatrix[0][1], modelViewMatrix[1][1], modelViewMatrix[2][1] ); // 2nd line of the ModelView matrix
+			backVector = vec3( modelViewMatrix[0][2], modelViewMatrix[1][2], modelViewMatrix[2][2] ); // 3rd line of the ModelView matrix
+
+			// the 4th column of the MV matrix is the position of the camera but encoded in terms of the right/up/back vectors
+			// -v*M gives the camera position in world coordinates
+			cameraPos = ((-1.0) * modelViewMatrix[3] * modelViewMatrix).xyz; // negative 4th column of the MV matrix multiplied by the MV matrix
+
+			// Get point-centered vectors
+			backVector = normalize( cameraPos - position ); // vector pointing from the point's position towards the camera
+			rightVector = normalize( cross( upVector , backVector ) ); // cross product between a temporary up vector (from the camera) and the back vector gives the right vector
+			upVector = cross(backVector, rightVector); // cross product between the right vector and the back vector gives the true up vector
+			upVector = cross(-rightVector, backVector); // cross product between the right vector and the back vector gives the true up vector
+
+			/*
+			// NOTE: when enabling this, change depth calculation of "Volume (Geometric)" calculation
+			// use the position of the point in the sphere that is the closest to the camera
+			vPos = position + (1.0 * sizeMult) * backVector;
+			mvPosition = modelViewMatrix * vec4( position, 1.0 );
+			vMvPos = mvPosition.xyz;
+			gl_Position = projectionMatrix * mvPosition;
+			heightInPixels = ( 1.0 * resolution.y * projectionMatrix[1][1] ) / ( 2.0 * (-mvPosition.z) );
+			heightInPixels = heightInPixels * (2.0 * 1.0 * sizeMult);
+			gl_PointSize = heightInPixels;
+			*/
+
+			//vVertexIdColor = idToColor(gl_VertexID);
+
+		}
+	</script>
+	<script id="debugVertexIdFS" type="x-shader/x-fragment">
+		precision highp float;
+		varying vec4 vVertexIdColor;
+		void main() {
+			gl_FragColor = vVertexIdColor;
+		}
+	</script>
+	<script id="debugDataTexturesFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform sampler2D tAtomsCoords;
+		uniform sampler2D tNearAtoms;
+		// Now declared as 'define's:
+		//uniform float tex1Dim;
+		//uniform float tex2Dim;
+		varying float vId;
+		void main() {
+			vec2 dist = abs( gl_PointCoord - vec2(0.5) );
+			if( max( dist.x , dist.y ) > 0.49 ){ // draw white border
+				gl_FragColor = vec4(1.0);
+				return;
+			}
+			if( mod( vId , 2.0) < 0.5 ) gl_FragColor = texture2D( tAtomsCoords , gl_PointCoord );
+			else gl_FragColor = texture2D( tNearAtoms , gl_PointCoord );
+			gl_FragColor.a = 1.0;
+		}
+	</script>
+	<script id="debugLongRangeOcclusionFS" type="x-shader/x-fragment">
+		precision highp float;
+		// 'coords*' variables stored as 'define's
+		//uniform vec3 coordsCenter;
+		//uniform vec3 coordsRange;
+		varying vec4 vIdColor;
+		varying vec3 vPos;
+		varying vec3 backVector;
+		void main() {
+			vec2 posVector = gl_PointCoord * 2.0 - 1.0;
+			float distToCenter = length( posVector );
+			if(distToCenter > 1.0) discard;
+			gl_FragColor = vIdColor;
+			if(distToCenter > 0.9) gl_FragColor.xyz = vec3(1.0);
+
+			// TODO: use 'coordsHalfInvRange' instead of 'coordsRange'
+			// occlusion = ( abs( point - center) / (range/2) ) * abs( camera - point )
+			//vec3 occlusionPerDir = abs( ((vPos - coordsCenter) * backVector ) ) / ( 0.5 * coordsRange );
+			vec3 occlusionPerDir = abs( (vPos - coordsCenter) / ( 0.5 * coordsRange ) );
+			//float occlusion = max( occlusionPerDir.x , max( occlusionPerDir.y , occlusionPerDir.z ) );
+			//float occlusion = min( occlusionPerDir.x , min( occlusionPerDir.y , occlusionPerDir.z ) );
+			//float occlusion = length(occlusionPerDir);
+			float occlusion = min( dot(occlusionPerDir,occlusionPerDir) , 1.0);
+			gl_FragColor.xyz *= occlusion;
+			
+		}
+	</script>
+	<script id="debugEllipsesFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform mat4 modelViewMatrix;
+		uniform vec3 cameraFront;
+		uniform vec3 cameraRight;
+		uniform vec3 cameraUp;
+		uniform vec3 cameraPosition;
+		varying vec3 cameraPos;
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0 
+			color /= vec4(255.0);
+			return color;
+		}
+		vec4 vec3x2ToColor(vec3 v1, vec3 v2){ // divide point into a 2 by 3 grid and color each cell according to the two vec3 input values
+			if( (abs(gl_PointCoord.x - 0.5) > 0.475) || (abs(gl_PointCoord.y - 0.5) > 0.475) ) return vec4(1.0); // draw white border
+			if( abs(gl_PointCoord.y - 0.5) < 0.01 ) return vec4(1.0); // draw white horizontal separator
+			vec3 valsTriplet;
+			if( gl_PointCoord.y < 0.5 ) valsTriplet = v1;
+			else valsTriplet = v2;
+			float val = 0.0;
+			if( gl_PointCoord.x < (1.0/3.0) ) val = valsTriplet.x;
+			else if( gl_PointCoord.x < (2.0/3.0) ) val = valsTriplet.y;
+			else val = valsTriplet.z;
+			return floatToColor(val);
+		}
+		void main() {
+			// Get camera vectors
+			vec3 camRight = vec3( modelViewMatrix[0][0], modelViewMatrix[1][0], modelViewMatrix[2][0] ); // 1st line of the ModelView matrix
+			vec3 camUp = vec3( modelViewMatrix[0][1], modelViewMatrix[1][1], modelViewMatrix[2][1] ); // 2nd line of the ModelView matrix
+			vec3 camBack = vec3( modelViewMatrix[0][2], modelViewMatrix[1][2], modelViewMatrix[2][2] ); // 3rd line of the ModelView matrix
+
+			vec3 dotProds = vec3( dot(cameraRight,camRight) , dot(cameraUp,camUp) , dot(-cameraFront,camBack) );
+			vec3 crossProds = vec3( length(cross(cameraRight,camRight)) , length(cross(cameraUp,camUp)) , length(cross(-cameraFront,camBack)) );
+			gl_FragColor = vec3x2ToColor( dotProds , crossProds );
+		}
+	</script>
+	<script id="debugOcclusionFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform float sizeMult;
+		uniform vec3 cameraPosition;
+		varying vec3 rightVector;
+		varying vec3 upVector;
+		varying vec3 backVector;
+		varying vec3 cameraPos;
+		varying vec3 vPos;
+		varying vec4 vIdColor;
+		
+		varying vec3 nearAtomsCoords[6];
+		varying vec4 nearAtomsColors[6];
+		vec3 pointPos;
+		
+		float getMinDistToNearAtoms(){
+			float nearAtomDist;
+			vec3 nearAtomCoords;
+			float minDist = 255.0;
+			nearAtomDist = distance(nearAtomsCoords[0], pointPos) - nearAtomsColors[0].a; // 'nearAtomsColors[i].a' is the atom radius
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[1], pointPos) - nearAtomsColors[1].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[2], pointPos) - nearAtomsColors[2].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[3], pointPos) - nearAtomsColors[3].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[4], pointPos) - nearAtomsColors[4].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[5], pointPos) - nearAtomsColors[5].a;
+			minDist = min(minDist, nearAtomDist);
+			return minDist;
+		}
+		void main() {
+		
+			/* gl_PointCoord : top left = (0,0) ; bottom right = (1,1) */
+			vec2 posVector = gl_PointCoord * 2.0 - 1.0; // gl_PointCoord between (0,0) and (1,1) ; new 'vector' centered at (0,0)
+			float distToCenter = length( posVector );
+			if(distToCenter > 1.0) discard; // outside circle
+			float elevation = sqrt( 1.0 - distToCenter * distToCenter ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
+			posVector.y *= (-1.0); // invert Y coord sign because gl_PointCoord.y grows from top to bottom and not the other way around
+
+			float radius = (1.0 * sizeMult); // assuming that the default radius of all the spheres is 1.0 world units
+			pointPos = vPos;
+			pointPos += radius * elevation * backVector;
+			pointPos += radius * posVector.x * rightVector;
+			pointPos += radius * posVector.y * upVector;
+			
+			float minDist = getMinDistToNearAtoms();
+			if(minDist < 0.0) discard;
+			vec3 color = vIdColor.rgb;
+			if(distToCenter > 0.9) color = vec3(1.0);
+			// TODO: fix occlusion
+			//float occlusion = ( 2.0 * min( minDist , (0.5 * sizeMult) ) ); // cuttoff occlusion set to 0.5 the sphere's size
+			float occlusion = ( 0.5 * min( minDist , (2.0 * sizeMult) ) ); // cuttoff occlusion set to 2.0 the sphere's size
+			occlusion = 0.25 + 0.75 * occlusion; // darken 75% at max
+			gl_FragColor = vec4( color * occlusion , 1.0 );
+		}
+	</script>
+	<script id="debugReflectionFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform float sizeMult;
+		uniform vec3 cameraPosition;
+		varying vec3 rightVector;
+		varying vec3 upVector;
+		varying vec3 backVector;
+		varying vec3 cameraPos;
+		varying vec3 vPos;
+		varying vec4 vIdColor;
+		
+		varying vec3 nearAtomsCoords[6];
+		varying vec4 nearAtomsColors[6];
+		vec3 pointPos;
+		
+		float hitDistance;
+		vec3 hitColor;
+
+		float getMinDistToNearAtomsAndRelectionHit( vec3 vectorReflection ){
+			float nearAtomDist;
+			vec3 nearAtomCoords;
+			vec3 vectorPointToOtherAtom;
+			float minDist = 255.0;
+			hitDistance = 255.0;
+			hitColor = vec3( 0.0 , 0.0 , 0.0 , 1.0 );
+			vectorPointToOtherAtom = (nearAtomsCoords[0] - pointPos);
+			nearAtomDist = length(vectorPointToOtherAtom);
+
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[1], pointPos);
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[2], pointPos);
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[3], pointPos);
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[4], pointPos);
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[5], pointPos);
+			minDist = min(minDist, nearAtomDist);
+			return minDist;
+		}
+
+
+		void main(){
+		
+			/* gl_PointCoord : top left = (0,0) ; bottom right = (1,1) */
+			vec2 posVector = gl_PointCoord * 2.0 - 1.0; // gl_PointCoord between (0,0) and (1,1) ; new 'vector' centered at (0,0)
+			float distToCenter = length( posVector );
+			if(distToCenter > 1.0) discard; // outside circle
+			float elevation = sqrt( 1.0 - distToCenter * distToCenter ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
+			posVector.y *= (-1.0); // invert Y coord sign because gl_PointCoord.y grows from top to bottom and not the other way around
+
+			float radius = (1.0 * sizeMult); // assuming that the default radius of all the spheres is 1.0 world units
+			pointPos = vPos;
+			pointPos += radius * elevation * backVector;
+			pointPos += radius * posVector.x * rightVector;
+			pointPos += radius * posVector.y * upVector;
+			
+			float minDist = getMinDistToNearAtomsAndRelectionHit();
+			if(minDist < 0.0) discard;
+
+			vec3 vectorCamToPoint = normalize( pointPos - cameraPos );
+			vec3 vectorSurfaceNormal = normalize( pointPos - vPos );
+
+
+			vec3 color = vIdColor.rgb;
+			if(distToCenter > 0.9) color = vec3(1.0);
+			float occlusion = ( 2.0 * min( minDist , (0.5 * sizeMult) ) ); // cuttoff occlusion set to 0.5 the sphere's size
+			occlusion = 0.25 + 0.75 * occlusion; // darken 75% at max
+			gl_FragColor = vec4( color * occlusion , 1.0 );
+		}
+	</script>
+	<script id="debugDepthOfFieldFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform float sizeMult;
+		uniform vec3 cameraPosition;
+		varying vec3 rightVector;
+		varying vec3 upVector;
+		varying vec3 backVector;
+		varying vec3 cameraPos;
+		varying vec3 vPos;
+		varying vec4 vIdColor;
+		varying float vDepth;
+		
+		varying vec3 nearAtomsCoords[6];
+		varying vec4 nearAtomsColors[6];
+		vec3 pointPos;
+		
+		float getMinDistToNearAtoms(){
+			float nearAtomDist;
+			vec3 nearAtomCoords;
+			float minDist = 255.0;
+			nearAtomDist = distance(nearAtomsCoords[0], pointPos) - nearAtomsColors[0].a; // 'nearAtomsColors[i].a' is the atom radius;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[1], pointPos) - nearAtomsColors[1].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[2], pointPos) - nearAtomsColors[2].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[3], pointPos) - nearAtomsColors[3].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[4], pointPos) - nearAtomsColors[4].a;
+			minDist = min(minDist, nearAtomDist);
+			nearAtomDist = distance(nearAtomsCoords[5], pointPos) - nearAtomsColors[5].a;
+			minDist = min(minDist, nearAtomDist);
+			return minDist;
+		}
+		void main(){
+		
+			/* gl_PointCoord : top left = (0,0) ; bottom right = (1,1) */
+			vec2 posVector = gl_PointCoord * 2.0 - 1.0; // gl_PointCoord between (0,0) and (1,1) ; new 'vector' centered at (0,0)
+			float distToCenter = length( posVector );
+			if(distToCenter > 1.0) discard; // outside circle
+			float elevation = sqrt( 1.0 - distToCenter * distToCenter ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
+			posVector.y *= (-1.0); // invert Y coord sign because gl_PointCoord.y grows from top to bottom and not the other way around
+
+			float radius = (1.0 * sizeMult); // assuming that the default radius of all the spheres is 1.0 world units
+			pointPos = vPos;
+			pointPos += radius * elevation * backVector;
+			pointPos += radius * posVector.x * rightVector;
+			pointPos += radius * posVector.y * upVector;
+			
+			float minDist = getMinDistToNearAtoms();
+			if(minDist < 0.0) discard;
+			gl_FragColor = vIdColor;
+			float borderSize = 2.0 * abs( vDepth - 0.5 ); // distance to the middle of the viewport; 0.0 at middle and 1.0 at near/far
+			borderSize = max( 0.25 , 1.0 - borderSize ); // now 1.0 at middle and 0.25 at near/far
+			if(distToCenter > borderSize){
+				gl_FragColor.a = borderSize;
+			}
+		}
+	</script>
+	<script id="debugVolumeFS" type="x-shader/x-fragment">
+		precision highp float;
+		/**/
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+		/**/
+		uniform float sizeMult;
+		uniform vec3 cameraPosition;
+		varying vec3 rightVector;
+		varying vec3 upVector;
+		varying vec3 backVector;
+		varying vec3 cameraPos;
+		varying float vId;
+		varying vec3 vPos;
+		varying vec3 vMvPos;
+		varying vec4 vIdColor;
+		
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0 
+			color /= vec4(255.0);
+			return color;
+		}
+		vec4 float6ToColor(float array[6]){ // divide point into a 2 by 3 grid and color each cell according to the 6 input values (float[6])
+			if( (abs(gl_PointCoord.x - 0.5) > 0.475) || (abs(gl_PointCoord.y - 0.5) > 0.475) ) return vec4(1.0); // draw white border
+			vec3 valsTriplet;
+			if( gl_PointCoord.y < 0.5 ) valsTriplet = vec3(array[0], array[1], array[2]);
+			else valsTriplet = vec3(array[3], array[4], array[5]);
+			float val = 0.0;
+			if( gl_PointCoord.x < (1.0/3.0) ) val = valsTriplet.x;
+			else if( gl_PointCoord.x < (2.0/3.0) ) val = valsTriplet.y;
+			else val = valsTriplet.z;
+			return floatToColor(val);
+		}
+		vec4 vec3x2ToColor(vec3 v1, vec3 v2){
+			float array[6];
+			array[0] = v1.x;
+			array[1] = v1.y;
+			array[2] = v1.z;
+			array[3] = v2.x;
+			array[4] = v2.y;
+			array[5] = v2.z;
+			return float6ToColor(array);
+		}
+		
+		/*
+		float get1stNearAtomId(){
+			float id = (vId*2.0) + 0.5;
+			float tex2InvDim = (1.0 / tex2Dim);
+			vec2 tex2Coord = vec2( mod(id, tex2Dim) , floor(id * tex2InvDim) );
+			tex2Coord.y += 0.5;
+			tex2Coord *= tex2InvDim;
+			return texture2D( tNearAtoms, tex2Coord ).x;
+		}
+		vec3 getNearAtomCoords(float id){
+			float nearAtomId = (id + 0.5);
+			float tex1InvDim = (1.0 / tex1Dim);
+			vec2 tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
+			tex1Coord.y += 0.5;
+			tex1Coord *= tex1InvDim;
+			return texture2D( tAtomsCoords, tex1Coord ).xyz;
+		}
+		*/
+
+		//varying float nearAtomsIds[6];
+		//varying float nearAtomsTypes[6];
+		varying vec3 nearAtomsCoords[6];
+		vec3 pointPos;
+		
+		// TODO: when near atoms have different radius, update "nearAtomRadiusSquared" accordingly
+		// Check if the (squared) distance between this (surface) point and the center of any of the near atoms is less than their radius
+		// If yes, then the point is covered, and the fragment is discarded here
+		float checkDistsToNearAtoms(){
+			float nearAtomDist;
+			vec3 nearAtomCoords;
+			float minDist = 255.0;
+			//float nearAtomRadiusSquared = (radius * radius); // (squared) radius of near atom
+			float nearAtomRadiusSquared = (1.0 * sizeMult);
+			nearAtomCoords = nearAtomsCoords[0];
+			nearAtomCoords -= pointPos;
+			nearAtomDist = dot(nearAtomCoords, nearAtomCoords);
+			if(nearAtomDist < nearAtomRadiusSquared) discard;
+			if(nearAtomDist < minDist) minDist = nearAtomDist;
+			nearAtomCoords = nearAtomsCoords[1];
+			nearAtomCoords -= pointPos;
+			nearAtomDist = dot(nearAtomCoords, nearAtomCoords);
+			if(nearAtomDist < nearAtomRadiusSquared) discard;
+			if(nearAtomDist < minDist) minDist = nearAtomDist;
+			nearAtomCoords = nearAtomsCoords[2];
+			nearAtomCoords -= pointPos;
+			nearAtomDist = dot(nearAtomCoords, nearAtomCoords);
+			if(nearAtomDist < nearAtomRadiusSquared) discard;
+			if(nearAtomDist < minDist) minDist = nearAtomDist;
+			nearAtomCoords = nearAtomsCoords[3];
+			nearAtomCoords -= pointPos;
+			nearAtomDist = dot(nearAtomCoords, nearAtomCoords);
+			if(nearAtomDist < nearAtomRadiusSquared) discard;
+			if(nearAtomDist < minDist) minDist = nearAtomDist;
+			nearAtomCoords = nearAtomsCoords[4];
+			nearAtomCoords -= pointPos;
+			nearAtomDist = dot(nearAtomCoords, nearAtomCoords);
+			if(nearAtomDist < nearAtomRadiusSquared) discard;
+			if(nearAtomDist < minDist) minDist = nearAtomDist;
+			nearAtomCoords = nearAtomsCoords[5];
+			nearAtomCoords -= pointPos;
+			nearAtomDist = dot(nearAtomCoords, nearAtomCoords);
+			if(nearAtomDist < nearAtomRadiusSquared) discard;
+			minDist = sqrt(minDist);
+			return minDist;
+		}
+		void main() {
+
+			//gl_FragColor = vec3x2ToColor( vPos , getNearAtomCoords(vId) ); return;
+			
+			/* gl_PointCoord : top left = (0,0) ; bottom right = (1,1) */
+			vec2 posVector = gl_PointCoord * 2.0 - 1.0; // gl_PointCoord between (0,0) and (1,1) ; new 'vector' centered at (0,0)
+			float distToCenter = length( posVector );
+			if(distToCenter > 1.0) discard; // outside circle
+			float elevation = sqrt( 1.0 - distToCenter * distToCenter ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
+			posVector.y *= (-1.0); // invert Y coord sign because gl_PointCoord.y grows from top to bottom and not the other way around
+
+			float radius = (1.0 * sizeMult); // assuming that the default radius of all the spheres is 1.0 world units
+			pointPos = vPos;
+			/*
+			// Change this depending on wether the front plane is at center of the sphere or at surface of the sphere
+			pointPos -= radius * (1.0 - elevation) * backVector; // now 'elevation' needs to be 0 at the center and 1 at the edges
+			*/
+			pointPos += radius * elevation * backVector;
+			pointPos += radius * posVector.x * rightVector;
+			pointPos += radius * posVector.y * upVector;
+			//gl_FragColor = floatToColor(length(pointPos - vPos)); return;
+
+			/*
+			vec4 mvpPointPos = projectionMatrix * modelViewMatrix * vec4( pointPos , 1.0 ); // get clip coordinates ; camera at (0,0)
+			mvpPointPos = mvpPointPos / (mvpPointPos.w); // get NDC coordinates ; in the range [-1,+1]
+			mvpPointPos = (mvpPointPos + 1.0) * 0.5; // now in the range [0,1]
+			mvpPointPos.xy *= (resolution - 1.0); // convert to screen coordinates ; in the range from [0,0] to [(W-1),(H-1)]
+			mvpPointPos.xy += 0.5; // middle of the pixel
+			//gl_FragColor = floatToColor( distance( mvpPointPos.xy , gl_FragCoord.xy ) ); return;
+			mvpPointPos -= gl_FragCoord;
+			gl_FragColor = vec4( abs( mvpPointPos.xy ) , 0.0 , 1.0 ); return;
+			*/
+			
+			checkDistsToNearAtoms(); // the fragment is discarded inside, if (minDist - radius) < 0.0
+			//if((minDist - radius) < 0.0) discard;
+			//gl_FragColor = float6ToColor(nearAtomsDists); return;
+			//gl_FragColor = floatToColor(minDist - radius); return;
+			if(distToCenter > 0.9){
+				gl_FragColor = vec4(1.0); // white circle border
+				return;
+			}
+			//if((minDist - radius) < 0.0) gl_FragColor = vec4(1.0,0.0,0.0,1.0); else gl_FragColor = vec4(0.0,1.0,0.0,1.0); return;
+			gl_FragColor = vIdColor;
+		}
+	</script>
+	<script id="debugTransformsFS" type="x-shader/x-fragment">
+		precision highp float;
+		/**/
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+		/**/
+		uniform float sizeMult;
+		uniform vec3 cameraPosition;
+		varying vec3 rightVector;
+		varying vec3 upVector;
+		varying vec3 backVector;
+		varying vec3 cameraPos;
+		varying float vId;
+		varying vec3 vPos;
+		varying vec4 vIdColor;
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0 
+			color /= vec4(255.0);
+			return color;
+		}
+		vec4 vec3x2ToColor(vec3 v1, vec3 v2){ // divide point into a 2 by 3 grid and color each cell according to the two vec3 input values
+			if( (abs(gl_PointCoord.x - 0.5) > 0.475) || (abs(gl_PointCoord.y - 0.5) > 0.475) ) return vec4(1.0); // draw white border
+			if( abs(gl_PointCoord.y - 0.5) < 0.01 ) return vec4(1.0); // draw white horizontal separator
+			vec3 valsTriplet;
+			if( gl_PointCoord.y < 0.5 ) valsTriplet = v1;
+			else valsTriplet = v2;
+			float val = 0.0;
+			if( gl_PointCoord.x < (1.0/3.0) ) val = valsTriplet.x;
+			else if( gl_PointCoord.x < (2.0/3.0) ) val = valsTriplet.y;
+			else val = valsTriplet.z;
+			return floatToColor(val);
+		}
+		// TODO: simplify using only the unitary 'frontDir' vector
+		vec3 getPointInCameraCoords(vec3 point, vec3 camPos, vec3 backDir, vec3 upDir){
+			vec3 coords;
+			vec3 pointDir = ( point - camPos );		// 'point' is the vector from the camera to the input point
+			coords.z = dot( backDir , pointDir );	// z = dot(back,point) ; length of the projection of the point vector in the back vector
+			coords.y = dot( upDir , pointDir );		// y = dot(up,point) ; length of the projection of the point vector in the up vector
+			vec3 rightDir = cross( upDir , backDir );
+			coords.x = dot( rightDir , pointDir );	// x = dot(right,point) ; length of the projection of the point vector in the right vector
+			return coords;
+		}
+		// From a point in camera/eye space, get all its coordinates in the range [0,1] relative to the frustum
+		// NOTE: point.z is negative ; get from: point = (modelViewMatrix * position).xyz
+		// NOTE: Not [-1,+1] like the NDC coordinates!
+		vec3 getPointIn01Coords(vec3 point){
+			float yTopVal = (-point.z) * tan( radians(fieldOfView*0.5) );	// = z*tan(fov/2)
+			float xRightVal = aspectRatio * yTopVal;						// = AR*z*tan(fov/2)
+			float recipYRange = ( 1.0 / ( 2.0 * yTopVal ) );				// = 1/(2*z*tan(fov/2))
+			float recipXRange = ( recipYRange / aspectRatio );				// = 1/(AR*2*z*tan(fov/2))
+			float recipZRange = ( 1.0 / (cameraFar - cameraNear) );			// = 1/(far-near)
+			vec3 coords;
+			coords.x = ( point.x + xRightVal ) * recipXRange;		// X = (x-left)/(2*z*tan(fov/2)*AR) ; left=-yTopVal is negative
+			coords.y = ( point.y + yTopVal ) * recipYRange;			// Y = (y-bottom)/(2*z*tan(fov/2)) ; bottom=-xRightVal is negative
+			coords.z = ( (-point.z) - cameraNear ) * recipZRange;	// Z = (z-near)/(far-near) ; linear mapping is not used by OpenGL
+			coords.z *= ( cameraFar / (-point.z) );					// Z = (far*(z-near))/(z*(far-near)) ; non-linear mapping
+			return coords;
+		}
+		void main() {
+
+			// Get camera vectors
+			vec3 camRight = vec3( modelViewMatrix[0][0], modelViewMatrix[1][0], modelViewMatrix[2][0] ); // 1st line of the ModelView matrix
+			vec3 camUp = vec3( modelViewMatrix[0][1], modelViewMatrix[1][1], modelViewMatrix[2][1] ); // 2nd line of the ModelView matrix
+			vec3 camBack = vec3( modelViewMatrix[0][2], modelViewMatrix[1][2], modelViewMatrix[2][2] ); // 3rd line of the ModelView matrix
+
+			/*
+			// NOTE: it's the same values
+			gl_FragColor = vec3x2ToColor( cameraPos , cameraPosition );
+			return;
+
+			// NOTE: all lengths are equal to 1.0
+			vec3 lengthVectors = vec3( length(rightVector) , length(upVector) , length(backVector) );
+			vec3 lengthCamVectors = vec3( length(camRight) , length(camUp) , length(camBack) );
+			gl_FragColor = vec3x2ToColor( lengthVectors , lengthCamVectors );
+			return;
+
+			vec3 dotProds = vec3( dot(rightVector,camRight) , dot(upVector,camUp) , dot(backVector,camBack) );
+			vec3 crossProds = vec3( length(cross(rightVector,camRight)) , length(cross(upVector,camUp)) , length(cross(backVector,camBack)) );
+			gl_FragColor = vec3x2ToColor( dotProds , crossProds );
+			return;
+			*/
+			
+			vec4 mvPos = modelViewMatrix * vec4( vPos , 1.0 ); // get eye/camera coordinates ; camera at (0,0)
+			gl_FragColor = vec3x2ToColor( mvPos.xyz ,  getPointInCameraCoords( vPos , cameraPosition , camBack , camUp ) );
+			return;
+
+			vec4 mvpPos = projectionMatrix * mvPos; // get clip coordinates 
+			mvpPos = mvpPos / (mvpPos.w); // get NDC coordinates ; in the range [-1,+1]
+			mvpPos = (mvpPos + 1.0) * 0.5; // now in the range [0,1]
+			gl_FragColor = vec3x2ToColor( mvpPos.xyz ,  getPointIn01Coords( mvPos.xyz ) ); return;
+			//gl_FragColor = floatToColor( distance( mvpPos.xyz , getPointIn01Coords( vMvPos ) ) ); return;
+			//gl_FragColor = vec4( abs( mvpPos.xyz - getPointIn01Coords( vMvPos ) ) , 1.0 ); return;
+		}
+	</script>
+	<script id="debugVectorsFS" type="x-shader/x-fragment">
+		precision highp float;
+		// Now declared as 'define's:
+		//uniform vec2 resolution;
+		uniform mat4 modelViewMatrix;
+		uniform mat4 projectionMatrix;
+		varying vec3 rightVector;
+		varying vec3 upVector;
+		varying vec3 backVector;
+		varying vec3 vPos;
+		varying float pointSize;
+		varying float vDepth;
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0
+			color /= vec4(255.0);
+			return color;
+		}
+		vec4 vec3ToColor(vec3 point){ // divide point into 3 vertical slices and color each one according to the X,Y,Z coordinates of the point
+			if( (abs(gl_PointCoord.x - 0.5) > 0.49) || (abs(gl_PointCoord.y - 0.5) > 0.49) ) return vec4(1.0);
+			float val = 0.0;
+			if( gl_PointCoord.x < (1.0/3.0) ) val = point.x;
+			else if( gl_PointCoord.x < (2.0/3.0) ) val = point.y;
+			else val = point.z;
+			return floatToColor(val);
+		}
+
+		vec3 vectors[4];
+		void getVectorsForPoint( vec3 position ){
+
+			// Get 'clip coordinates', in eye/camera space
+			// The camera is located at (0,0,0) and facing the (-Z) axis
+			// All points will later be clipped to keep only the ones inside the frustum
+			vec4 mvpRightVector = projectionMatrix * modelViewMatrix * vec4( (position + rightVector) , 1.0 );
+			vec4 mvpUpVector = projectionMatrix * modelViewMatrix * vec4( (position + upVector) , 1.0 );
+			vec4 mvpBackVector = projectionMatrix * modelViewMatrix * vec4( (position + backVector) , 1.0 );
+			vec4 mvpPosition = projectionMatrix * modelViewMatrix * vec4( position , 1.0 );
+
+			// Get 'Normalized Device Coordinates' (NDC) by performing a perpective division
+			// All values are between (-1,-1,-1) and (+1,+1,+1) on a 2x2x2 cube centered at ((right+left)/2,(top+bottom)/2,(far+near)/2)
+			// The 'w' is '-z' from the clip coordinates
+			mvpRightVector = mvpRightVector / (mvpRightVector.w);
+			mvpUpVector = mvpUpVector / (mvpUpVector.w);
+			mvpBackVector = mvpBackVector / (mvpBackVector.w);
+			mvpPosition = mvpPosition / (mvpPosition.w);
+
+			vectors[0] = mvpPosition.xyz;
+			vectors[1] = mvpRightVector.xyz;
+			vectors[2] = mvpUpVector.xyz;
+			vectors[3] = mvpBackVector.xyz;
+		}
+
+
+		bool isOverLine(vec2 a, vec2 b, vec2 c, float s){
+			if( c.x - max( a.x , b.x ) > s || min( a.x , b.x ) - c.x > s ) return false;
+			if( c.y - max( a.y , b.y ) > s || min( a.y , b.y ) - c.y > s ) return false;
+			vec2 vAB = ( b - a );
+			vec2 vN = vec2( vAB.y , -vAB.x ); // vector perpendicular to the line
+			vec2 vAC = ( c - a );
+			float dist = dot( vAC , vN ) / length( vN ); // projection of AC in AB is equal to (AC.N)/|N|
+			return ( abs(dist) < s );
+		}
+		void main() {
+			/* gl_PointCoord between (0,0) and (1,1) , from TOP-left corner to BOTTOM-right corner of quad (unlike gl_FragCoord!) */
+			if( max( abs(gl_PointCoord.x - 0.5) , abs(gl_PointCoord.y - 0.5) ) > 0.475 ){ // draw white squared border
+				gl_FragColor = vec4( vec3(vDepth) , 1.0); // greyed-out by linear depth
+				return;
+			}
+			/* gl_FragCoord between (0,0) and ((width-1),(height-1)) , from BOTTOM-left corner to TOP-right corner of screen (unlike gl_PointCoord!) */
+			/* gl_FragCoord values include +(0.5,0.5) to fall in the middle of the pixel */
+			//gl_FragColor = vec3ToColor(gl_FragCoord.xyz);
+			//gl_FragColor = vec3ToColor(vectors[0].xyz);
+			// convert all the coordinates into the range [-1,+1] (NDC coordinates), over a 2x2 square, to perform the calculations
+			vec2 fragCoord = ( gl_FragCoord.xy - vec2(0.5) ) / vec2( (resolution.x - 1.0) , (resolution.y - 1.0) ); // convert gl_FragCoord to range [0,1]x[0,1]
+			/*
+			float aspectRatio = ( resolution.x / resolution.y );
+			fragCoord.x /= aspectRatio;
+			*/
+			fragCoord = (fragCoord * 2.0 - 1.0); // now convert gl_FragCoord to range [-1,+1]x[-1,+1]
+			float markRadius = (pointSize / resolution.y) * 2.0; // resolution of the point size, scaled to range [0,2]
+			markRadius = markRadius * 0.02; // define the mark radius as (1/50) of the point size
+			float depth = 1.0; // depth value (gl_FragCoord.z) between 0.0 (close) and 1.0 (far)
+			vec3 color = vec3(0.0);
+
+			getVectorsForPoint(vPos); // populates "vectors" array
+
+			/* Draw the 4 points as circles (check if pixel falls inside any of the 4 points) */
+			if( ( vectors[0].z < depth ) && distance( fragCoord , vectors[0].xy ) < markRadius ){ // 0-th (point) position in white
+				color = vec3(1.0);
+				depth = vectors[0].z;
+			}
+			if( ( vectors[1].z < depth ) && distance( fragCoord , vectors[1].xy ) < markRadius ){ // 1st (X/right) position in red
+				color = vec3(1.0,0.0,0.0);
+				depth = vectors[1].z;
+			}
+			if( ( vectors[2].z < depth ) && distance( fragCoord , vectors[2].xy ) < markRadius ){ // 2nd (Y/up) position in green
+				color = vec3(0.0,1.0,0.0);
+				depth = vectors[2].z;
+			}
+			if( ( vectors[3].z < depth ) && distance( fragCoord , vectors[3].xy ) < markRadius ){ // 3rd (Z/back) position in blue
+				color = vec3(0.0,0.0,1.0);
+				depth = vectors[3].z;
+			}
+			/* Set the line depth to fall in the middle of the distance between the center 0-th point and the current point */
+			float lineDepth = 0.0;
+			/* Check if the current pixel falls over any of the lines connecting the 0-th point to any of the 3 other points */
+			lineDepth = (vectors[1].z + vectors[0].z) * 0.5;
+			if( ( vectors[1].z < depth ) && isOverLine( vectors[0].xy , vectors[1].xy , fragCoord , 0.5*markRadius ) ){
+				color = vec3(1.0,0.0,0.0);
+				depth = vectors[1].z;
+			}
+			lineDepth = (vectors[2].z + vectors[0].z) * 0.5;
+			if( ( vectors[2].z < depth ) && isOverLine( vectors[0].xy , vectors[2].xy , fragCoord , 0.5*markRadius ) ){
+				color = vec3(0.0,1.0,0.0);
+				depth = vectors[2].z;
+			}
+			lineDepth = (vectors[3].z + vectors[0].z) * 0.5;
+			if( ( vectors[3].z < depth ) && isOverLine( vectors[0].xy , vectors[3].xy , fragCoord , 0.5*markRadius ) ){
+				color = vec3(0.0,0.0,1.0);
+				depth = vectors[3].z;
+			}
+			gl_FragColor = vec4( vDepth*color , 1.0 );
+		}
+	</script>
+	<script id="debugProximityFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform sampler2D tAtomsCoords;
+		uniform sampler2D tNearAtoms;
+		uniform mat4 modelViewMatrix;
+		// Now declared as 'define's:
+		//uniform float tex1Dim;
+		//uniform float tex2Dim;
+		varying float vId;
+		varying vec3 vPos;
+		/*
+		// array initialization does not work in WebGL1; use defines (?) instead
+		const float elemsRadius[5] = float[5]( 1.20, 1.70, 1.55, 1.52, 1.80 ); // H,C,N,O,S
+		const vec3 elemsColor[5] = vec3[5](
+			vec3(1.00,1.00,1.00),
+			vec3(0.25,0.25,0.25),
+			vec3(0.00,0.00,1.00),
+			vec3(1.00,0.00,0.00),
+			vec3(1.00,1.00,0.00) );
+		*/
+		#define elemsProperties (float[5](1.20,1.70,1.55,1.52,1.80))
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0 
+			color /= vec4(255.0);
+			return color;
+		}
+		// TODO: unroll 'if's into the 6 cases
+		vec4 vec3x2ToColor(vec3 array[2]){ // divide point into a 2 by 3 grid and color each cell according to the 6 input values (vec3[2])
+			if( (abs(gl_PointCoord.x - 0.5) > 0.475) || (abs(gl_PointCoord.y - 0.5) > 0.475) ) return vec4(1.0); // draw white border
+			vec3 valsTriplet;
+			if( gl_PointCoord.y < 0.5 ) valsTriplet = array[0];
+			else valsTriplet = array[1];
+			float val = 0.0;
+			if( gl_PointCoord.x < (1.0/3.0) ) val = valsTriplet.x;
+			else if( gl_PointCoord.x < (2.0/3.0) ) val = valsTriplet.y;
+			else val = valsTriplet.z;
+			return floatToColor(val);
+		}
+		vec4 float6ToColor(float array[6]){ // divide point into a 2 by 3 grid and color each cell according to the 6 input values (float[6])
+			vec3 valsTriplets[2];
+			valsTriplets[0] = vec3(array[0], array[1], array[2]);
+			valsTriplets[1] = vec3(array[3], array[4], array[5]);
+			return vec3x2ToColor(valsTriplets);
+		}
+		float nearAtomsIds[6];
+		vec3 nearAtomsCoords[6];
+		vec3 nearAtomsDists[2];
+		vec3 nearAtomsDotProds[2];
+		void loadNearAtomsIds(){
+			float id = (vId*2.0) + 1.0; // (vId*2.0) because 2 texels are allocated for each atom ; (+1.0) otherwise mod(a,b) and floor(a,b) give wrong result when a=b (vId*2.0=tex2Dim)
+			vec2 uv = vec2( mod(id, tex2Dim) , floor(id/tex2Dim) );
+			uv.x -= 1.0; // substract the extra +1 left on the mod because of the (id=vId*2+1) operation
+			uv += vec2(0.5); // +0.5 to fall in the middle of the texel
+			uv /= tex2Dim; // to convert to the range [0.0,1.0]
+			vec4 texel = texture2D( tNearAtoms, uv );
+			nearAtomsIds[0] = texel.x;
+			nearAtomsIds[1] = texel.y;
+			nearAtomsIds[2] = texel.z;
+			uv.x += 1.0/tex2Dim; // get the 2nd texel
+			texel = texture2D( tNearAtoms, uv );
+			nearAtomsIds[3] = texel.x;
+			nearAtomsIds[4] = texel.y;
+			nearAtomsIds[5] = texel.z;
+		}
+		// TODO: write unrolled loop
+		void loadNearAtomsCoords(){
+			float naId;
+			vec2 uv;
+			#pragma unroll_loop
+			for ( int i = 0; i < 6; i ++ ) {
+				naId = nearAtomsIds[ i ];
+				uv = vec2( mod(naId, tex1Dim) , floor(naId/tex1Dim) );
+				uv += vec2(0.5); // +0.5 to fall in the middle of the texel
+				uv /= tex1Dim; // to convert to the range [0.0,1.0]
+				nearAtomsCoords[ i ] = texture2D( tAtomsCoords, uv ).xyz;
+			}
+		}
+		void getNearAtomsVals(){
+			nearAtomsDists[0][0] = distance(vPos, nearAtomsCoords[0]); // first 3 vals into the 1st vec3
+			nearAtomsDists[0][1] = distance(vPos, nearAtomsCoords[1]);
+			nearAtomsDists[0][2] = distance(vPos, nearAtomsCoords[2]);
+			nearAtomsDists[1][0] = distance(vPos, nearAtomsCoords[3]); // last 3 vals into the 2nd vec3
+			nearAtomsDists[1][1] = distance(vPos, nearAtomsCoords[4]);
+			nearAtomsDists[1][2] = distance(vPos, nearAtomsCoords[5]);
+			vec3 backVector = vec3( modelViewMatrix[0][2], modelViewMatrix[1][2], modelViewMatrix[2][2] );
+			// TODO: if only testing relative position (front/back), no need to normalize
+			nearAtomsDotProds[0][0] = dot(backVector, normalize(nearAtomsCoords[0] - vPos) ); // first 3 vals into the 1st vec3
+			nearAtomsDotProds[0][1] = dot(backVector, normalize(nearAtomsCoords[1] - vPos) );
+			nearAtomsDotProds[0][2] = dot(backVector, normalize(nearAtomsCoords[2] - vPos) );
+			nearAtomsDotProds[1][0] = dot(backVector, normalize(nearAtomsCoords[3] - vPos) ); // last 3 vals into the 2nd vec3
+			nearAtomsDotProds[1][1] = dot(backVector, normalize(nearAtomsCoords[4] - vPos) );
+			nearAtomsDotProds[1][2] = dot(backVector, normalize(nearAtomsCoords[5] - vPos) );
+		}
+		void main() {
+			loadNearAtomsIds();
+			loadNearAtomsCoords();
+			getNearAtomsVals();
+			//gl_FragColor = float6ToColor(nearAtomsIds);
+			gl_FragColor = vec3x2ToColor(nearAtomsDists);
+			//gl_FragColor = vec3x2ToColor(nearAtomsDotProds);
+		}
+	</script>
+	<script id="debugTextureFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform sampler2D tAtomsCoords;
+		uniform sampler2D tNearAtoms;
+		// Now declared as 'define's:
+		//uniform float tex1Dim;
+		//uniform float tex2Dim;
+		varying float vId;
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0 
+			color /= vec4(255.0);
+			return color;
+		}
+		vec4 tex3FloatsToColor(sampler2D texture, float texDim){ // divide point into 3 vertical slices and color each one according to the X,Y,Z coordinates of the atom id in the texture
+			if( (abs(gl_PointCoord.x - 0.5) > 0.49) || (abs(gl_PointCoord.y - 0.5) > 0.49) ) return vec4(1.0);
+			vec2 uv = vec2( mod(vId, texDim) , floor(vId/texDim) );
+			uv += vec2(0.5); // +0.5 to fall in the middle of the texel
+			uv /= texDim; // to convert to the range [0.0,1.0]
+			vec4 texel = texture2D( texture, uv );
+			//vec4 texel = vec4(uv,texDim,0.0);
+			float val = 0.0;
+			if( gl_PointCoord.x < (1.0/3.0) ) val = texel.x;
+			else if( gl_PointCoord.x < (2.0/3.0) ) val = texel.y;
+			else val = texel.z;
+			return floatToColor(val);
+		}
+		vec4 tex6FloatsToColor(sampler2D texture, float texDim){ // divide point into 6 vertical slices and color each one according to the 6 values for the atom id in the texture (2 texels)
+			if( (abs(gl_PointCoord.x - 0.5) > 0.49) || (abs(gl_PointCoord.y - 0.5) > 0.49) ) return vec4(1.0); // draw white border
+			float id = (vId*2.0) + 1.0; // (vId*2.0) because 2 texels are allocated for each atom ; (+1.0) otherwise mod(a,b) and floor(a,b) give wrong result when a=b (vId*2.0=tex2Dim)
+			vec2 uv = vec2( mod(id, texDim) , floor(id/texDim) );
+			float x = gl_PointCoord.x; // between 0.0 and 1.0
+			if(x > 0.5) x -= 0.5; // so we can compare later with the 1/6 and 2/6 values on both halves
+			else uv.x -= 1.0; // we are already on the 2nd texel, because of the (id=vId*2+1); on the 1st half, substract the +1
+			uv += vec2(0.5); // +0.5 to fall in the middle of the texel
+			uv /= texDim; // to convert to the range [0.0,1.0]
+			vec4 texel = texture2D( texture, uv );
+			//vec4 texel = vec4((uv.x-1.0),uv.y,vId,0.0);
+			float val = 0.0;
+			if( x < (1.0/6.0) ) val = texel.x;
+			else if( x < (2.0/6.0) ) val = texel.y;
+			else val = texel.z;
+			return floatToColor(val);
+		}
+		void main() {
+			//gl_FragColor = floatToColor(vId);
+			//gl_FragColor = tex3FloatsToColor(tAtomsCoords,tex1Dim);
+			gl_FragColor = tex6FloatsToColor(tNearAtoms,tex2Dim);
+		}
+	</script>
+	<script id="debugMatrixFS" type="x-shader/x-fragment">
+		precision highp float;
+		uniform mat4 modelViewMatrix; // to view its contents with the matrixToColor function
+		uniform mat4 projectionMatrix;
+		vec4 floatToColor(in float x){
+			vec4 color = vec4(abs(x));
+			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
+			color = mod( color , vec4( 128.0 , 256.0 , 256.0 , 256.0 ) ); // ] -32,768.0 ; +32,768.0 [ (frac.res. = ~0.000015)
+			color = floor( color );
+			color.x += 128.0 * ( 1.0 - step(0.0, x) ); // (x < 0) : +128 ; (x >= 0) : +0 
+			color /= vec4(255.0);
+			return color;
+		}
+		vec4 matrixToColor(mat4 mat){ // gl_PointCoord : top left = (0,0) ; bottom right = (1,1)
+			vec2 coord = (mod(gl_PointCoord, 0.25) - 0.125) / 0.125; // distance from middle of 0.25 intervals with value between [-1,+1]
+			if( any( greaterThanEqual( abs(coord) , vec2(0.95) ) ) ) return vec4(1.0); // white borders close to multiples of 0.25
+			coord = floor( gl_PointCoord / 0.25 );
+			int i = int(coord.y); // i-th row (vertical step)
+			int j = int(coord.x); // j-th column (horizontal step)
+			//return floatToColor( mat[i][j] ); // does not work; requires constant indexes
+			vec4 col;
+			if(j==0) col = mat[0];
+			else if(j==1) col = mat[1];
+			else if(j==2) col = mat[2];
+			else col = mat[3];
+			float val;
+			if(i==0) val = col[0];
+			else if(i==1) val = col[1];
+			else if(i==2) val = col[2];
+			else val = col[3];
+			return floatToColor(val);
+		}
+		void main() {
+			gl_FragColor = matrixToColor(modelViewMatrix);
+			//gl_FragColor = matrixToColor(projectionMatrix);
+			//gl_FragColor = matrixToColor(projectionMatrix * modelViewMatrix);
+		}
+	</script>
+	<script id="debugZBufferVolumeFS" type="x-shader/x-fragment">
+		#extension GL_EXT_frag_depth : enable
+		precision highp float;
+		varying vec4 vTestColor;
+		varying vec4 vIdColor;
+		varying float vSphereDepthChange;
+		void main() {
+			/* gl_PointCoord between (0,0) and (1,1) */
+			float distToCenter = abs(length( gl_PointCoord * 2.0 - 1.0 )); // get length 'D' of vector between (-1,-1) and (+1,+1)
+			float elevation = sqrt( 1.0 - distToCenter * distToCenter ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
+			/* depth value (gl_FragCoord.z) between 0.0 (close) and 1.0 (far) */
+			gl_FragDepthEXT = (gl_FragCoord.z - elevation * vSphereDepthChange);
+			if(distToCenter > 0.9){
+				if(distToCenter > 1.0) discard; // outside circle
+				gl_FragColor = vec4(1.0); // white circle border
+				return;
+			}
+			//gl_FragColor = vTestColor;
+			gl_FragColor = vIdColor;
+			//gl_FragColor = floatToColor(gl_FragCoord.z);
+			//gl_FragColor = floatToColor(elevation);
+		}
+	</script>
+	<script id="debugDepthFS" type="x-shader/x-fragment">
+		precision highp float;
+		varying float vDepth;
+		void main() {
+			gl_FragColor = vec4( vec3(vDepth) , 1.0 ); // [ near=1.0 , far=0.0 ]
+		}
+	</script>
+	<script id="debugPtCoordsFS" type="x-shader/x-fragment">
+		void main() {
+			/* gl_PointCoord varies from (0,0) to (1,1) ; from top-left corner to bottom-right corner of quad (unlike gl_FragCoord!) */
+			gl_FragColor = vec4( gl_PointCoord.x , gl_PointCoord.y , 1.0 , 1.0 );
+		}
+	</script>
+	<script id="debugScrCoordsFS" type="x-shader/x-fragment">
+		precision highp float;
+		// now declared as a define
+		//uniform vec2 resolution;
+		void main() {
+			/* gl_FragCoord varies from (0,0) to (width-1,height-1) ; from bottom-left corner to top-right corner of screen (unlike gl_PointCoord!) */
+			gl_FragColor = vec4( 1.0 , gl_FragCoord.x / resolution.x , gl_FragCoord.y / resolution.y , 1.0 );
+		}
+	</script>
+	<script id="debugPosFS" type="x-shader/x-fragment">
+		precision highp float;
+		varying vec4 vPosColor;
+		void main() {
+			gl_FragColor = vPosColor;
+		}
+	</script>
+	<script id="debugIdFS" type="x-shader/x-fragment">
+		precision highp float;
+		varying vec4 vIdColor;
+		void main() {
+			gl_FragColor = vIdColor;
+		}
+	</script>
+
+	<script>
+			var scene, camera, renderer, controls, light;
+			var raycaster, mouse, normMouseCoords;
+
+			var cameraNear, cameraFar;
+			var cameraFront, cameraUp, cameraRight;
+
+			var meshScene, pointsScene, spheresMesh, lines, points;
+			var meshAxesHelper, meshBoxHelper, pointsAxesHelper, pointsBoxHelper, cameraVectorsHelper;
+
+			var gui, rendering, shaderOptions, trackAtoms, showLines;
+			var frames, time, fps, msPerFrame, guiFps, guiMspf, guiRes, guiMem, guiDebugMessage;
+
+			var pointVS_start, pointVS_end, pointVS_middle;
+			var pointFS_start, pointFS_end, pointFS_middle;
+
+			var materials;
+			var textureAtomCoordinates, textureNearNeighbors, texture1StrideSize, texture2StrideSize;
+
+			var lastIntersectedObject;
+			var glContext, pixelData;
+
+			function createScene(){
+				"use strict";
+				meshScene = new THREE.Scene();
+				//meshScene.background = new THREE.Color( 0x0f0f0f );
+				//meshScene.fog = new THREE.Fog( 0x0f0f0f, 1, 100);
+				meshScene.background = new THREE.Color( 0x000000 );
+				meshScene.fog = new THREE.Fog( 0x000000, 1, 100);
+				light = new THREE.DirectionalLight( 0xffffff, 1 );
+				light.position.set( 1, 1, 1 ).normalize();
+				meshScene.add( light );
+				pointsScene = new THREE.Scene();
+				//pointsScene.background = new THREE.Color( 0x0f0f0f );
+				pointsScene.background = new THREE.Color( 0x000000 );
+				//scene = meshScene;
+				scene = pointsScene;
+				meshAxesHelper = new THREE.Group();
+				var origin = new THREE.Vector3(0,0,0);
+				meshAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(+1,0,0), origin, Math.abs(maxCoords[0]), 0xff5555, 0.5, 0.5 ) ); // X axis
+				meshAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(-1,0,0), origin, Math.abs(minCoords[0]), 0xaa0000, 0.5, 0.5 ) ); // X axis
+				meshAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,+1,0), origin, Math.abs(maxCoords[1]), 0x55ff55, 0.5, 0.5 ) ); // Y axis
+				meshAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,-1,0), origin, Math.abs(minCoords[1]), 0x00aa00, 0.5, 0.5 ) ); // Y axis
+				meshAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,0,+1), origin, Math.abs(maxCoords[2]), 0x5555ff, 0.5, 0.5 ) ); // Z axis
+				meshAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,0,-1), origin, Math.abs(minCoords[2]), 0x0000aa, 0.5, 0.5 ) ); // Z axis
+				var minCorner = new THREE.Vector3(minCoords[0],minCoords[1],minCoords[2]);
+				var maxCorner = new THREE.Vector3(maxCoords[0],maxCoords[1],maxCoords[2]);
+				var box = new THREE.Box3( minCorner, maxCorner );
+				meshBoxHelper = new THREE.Box3Helper( box, 0xffffff );
+				meshAxesHelper.visible = false;
+				meshBoxHelper.visible = false;
+				meshScene.add(meshAxesHelper);
+				meshScene.add(meshBoxHelper);
+				//pointsAxesHelper = meshAxesHelper.clone(true);
+				//pointsBoxHelper = meshBoxHelper.clone(true);
+				pointsAxesHelper = new THREE.Group();
+				pointsAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(+1,0,0), origin, Math.abs(maxCoords[0]), 0xff5555, 0.5, 0.5 ) ); // +X axis
+				pointsAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(-1,0,0), origin, Math.abs(minCoords[0]), 0xaa0000, 0.5, 0.5 ) ); // -X axis
+				pointsAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,+1,0), origin, Math.abs(maxCoords[1]), 0x55ff55, 0.5, 0.5 ) ); // +Y axis
+				pointsAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,-1,0), origin, Math.abs(minCoords[1]), 0x00aa00, 0.5, 0.5 ) ); // -Y axis
+				pointsAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,0,+1), origin, Math.abs(maxCoords[2]), 0x5555ff, 0.5, 0.5 ) ); // +Z axis
+				pointsAxesHelper.add( new THREE.ArrowHelper( new THREE.Vector3(0,0,-1), origin, Math.abs(minCoords[2]), 0x0000aa, 0.5, 0.5 ) ); // -Z axis
+				pointsBoxHelper = new THREE.Box3Helper( box, 0xffffff );
+				pointsAxesHelper.visible = false;
+				pointsBoxHelper.visible = false;
+				pointsScene.add(pointsAxesHelper);
+				pointsScene.add(pointsBoxHelper);
+			}
+	
+			function createCamera(){
+				"use strict";
+				camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, cameraNear, cameraFar);
+				camera.position.x = 2.0 * Math.abs(maxCoords[0]);
+				camera.position.y = 2.0 * Math.abs(maxCoords[1]);
+				camera.position.z = 2.0 * Math.abs(maxCoords[2]);
+				camera.lookAt(new THREE.Vector3(0,0,0));
+			}
+
+			function createCameraVectorsHelper(){
+				"use strict";
+				cameraVectorsHelper = new THREE.Group();
+				var origin = new THREE.Vector3(0,0,0);
+				var sphere = new THREE.Mesh( new THREE.SphereGeometry(0.25,8,8) , new THREE.MeshBasicMaterial({color: 0xffffff, transparent: true, opacity: 0.5}) );
+				var lineFront = new THREE.Line( new THREE.Geometry() , new THREE.LineBasicMaterial({color: 0xff0000, linewidth: 2}) ); // front: red
+				var lineUp    = new THREE.Line( new THREE.Geometry() , new THREE.LineBasicMaterial({color: 0x00ff00, linewidth: 2}) ); // up: green
+				var lineRight = new THREE.Line( new THREE.Geometry() , new THREE.LineBasicMaterial({color: 0x0000ff, linewidth: 2}) ); // right: blue
+				//var linePerp  = new THREE.Line( new THREE.Geometry() , new THREE.LineBasicMaterial({color: 0xff00ff, linewidth: 2}) ); // perpendicular: purple
+				lineFront.geometry.vertices.push( origin );
+				lineUp.geometry.vertices.push( origin );
+				lineRight.geometry.vertices.push( origin );
+				//linePerp.geometry.vertices.push( origin );
+				lineFront.geometry.vertices.push( new THREE.Vector3(1,0,0) );
+				lineUp.geometry.vertices.push( new THREE.Vector3(0,1,0) );
+				lineRight.geometry.vertices.push( new THREE.Vector3(0,0,1) );
+				//linePerp.geometry.vertices.push( new THREE.Vector3(1,1,1) );
+				cameraVectorsHelper.add(sphere);
+				cameraVectorsHelper.add(lineFront);
+				cameraVectorsHelper.add(lineUp);
+				cameraVectorsHelper.add(lineRight);
+				//cameraVectorsHelper.add(linePerp);
+				//cameraVectorsHelper.visible = false;
+				pointsScene.add(cameraVectorsHelper);
+			}
+
+			function updateCameraVectors(){
+				"use strict";
+				/*
+				var mvMatrix = new THREE.Matrix4();
+				camera.updateMatrix();
+				points.updateMatrix();
+				camera.updateMatrixWorld(true);
+				points.updateMatrixWorld(true);
+				mvMatrix.multiplyMatrices(camera.matrixWorldInverse, points.matrixWorld);
+				mvMatrix.extractBasis(cameraRight, cameraUp, cameraFront);
+				*/
+				camera.getWorldDirection(cameraFront);
+				cameraUp.copy(camera.up);
+				cameraRight.crossVectors(cameraFront, cameraUp);
+				//var scale = -1.0 * cameraFront.dot( cameraUp );
+				//cameraPerp.copy( cameraUp );
+				//cameraPerp.addScaledVector( cameraFront , scale ); // = up - (front . up) * front
+				cameraVectorsHelper.children[1].geometry.vertices[1].copy(cameraFront);
+				cameraVectorsHelper.children[2].geometry.vertices[1].copy(cameraUp);
+				cameraVectorsHelper.children[3].geometry.vertices[1].copy(cameraRight);
+				//cameraVectorsHelper.children[4].geometry.vertices[1].copy(cameraPerp);
+				cameraVectorsHelper.children[1].geometry.verticesNeedUpdate = true;
+				cameraVectorsHelper.children[2].geometry.verticesNeedUpdate = true;
+				cameraVectorsHelper.children[3].geometry.verticesNeedUpdate = true;
+				//cameraVectorsHelper.children[4].geometry.verticesNeedUpdate = true;
+			}
+	
+			function createLines(){
+				"use strict";
+				var geometry, vertices, material;
+				var colors = [ 0xff5555, 0xaa0000, 0x55ff55, 0x00aa00, 0x5555ff, 0x0000aa ]; // R,r,G,g,B,b
+				/*
+				var id, otherId;
+				var sourcePoint, destPoint;
+				sourcePoint = new THREE.Vector3();
+				destPoint = new THREE.Vector3();
+				*/
+				lines = new THREE.Group();
+				for(var k=0; k!=6; k++){ // create only 6 lines and update them according to the current atom
+					geometry = new THREE.BufferGeometry();
+					/*
+					vertices = new Float32Array( 6*numPdbAtoms ); // 2 * Vector3() * numPdbAtoms
+					for(id=0; id<numPdbAtoms; id++){
+						otherId = closestAtomsPerDir[k][id];
+						sourcePoint.set(pdbAtoms[id].x, pdbAtoms[id].y, pdbAtoms[id].z);
+						destPoint.set(pdbAtoms[otherId].x, pdbAtoms[otherId].y, pdbAtoms[otherId].z);
+						//destPoint.add(sourcePoint); // = S+(D-S)/2
+						//destPoint.multiplyScalar(0.5);
+						vertices[6*id + 0] = sourcePoint.x;
+						vertices[6*id + 1] = sourcePoint.y;
+						vertices[6*id + 2] = sourcePoint.z;
+						vertices[6*id + 3] = destPoint.x;
+						vertices[6*id + 4] = destPoint.y;
+						vertices[6*id + 5] = destPoint.z;
+					}
+					*/
+					vertices = new Float32Array( 6 ); // 2 * Vector3()
+					vertices[0] = 0.0;
+					vertices[1] = 0.0;
+					vertices[2] = 0.0;
+					vertices[3] = 0.0;
+					vertices[4] = 0.0;
+					vertices[5] = 0.0;
+					geometry.addAttribute( 'position', new THREE.BufferAttribute( vertices, 3 ) );
+					material = new THREE.LineBasicMaterial( { color: colors[k] } );
+					lines.add( new THREE.Line( geometry, material) );
+				}
+				lines.visible = false;
+				meshScene.add(lines);
+			}
+
+			function updateLines(id){
+				"use strict";
+				var disp, otherId;
+				for(var k=0; k!=6; k++){
+					disp = [0.0, 0.0, 0.0];
+					disp[ (k>>1) ] = ((-1)**k) * 0.05; // slightly displace starting point towards each direction to enable viewing overlapping lines
+					otherId = closestAtomsArray[k][id];
+					lines.children[k].geometry.getAttribute('position').setXYZ(0, (pdbAtoms[id].x + disp[0]), (pdbAtoms[id].y + disp[1]), (pdbAtoms[id].z + disp[2]));
+					lines.children[k].geometry.getAttribute('position').setXYZ(1, pdbAtoms[otherId].x, pdbAtoms[otherId].y, pdbAtoms[otherId].z);
+					lines.children[k].geometry.getAttribute('position').needsUpdate = true;
+				}
+			}
+
+			function render() {
+				"use strict";
+				renderer.render(scene, camera);
+			}
+
+			function takeScreenshot(){
+				"use strict";
+				render();
+				var imageURI = renderer.domElement.toDataURL('image/png');
+				var link = document.createElement('a');
+				//link.style.display = 'none';
+				link.href = imageURI;
+				link.download = 'Screenshot.png';
+				//document.body.appendChild(link);
+				link.click();
+				//document.body.removeChild(link);
+				link.remove();
+			}
+
+			// TODO: create "Unload" function to call "dispose()" on Geometries, Material, Textures and Render Targets
+			// See here: https://github.com/mrdoob/three.js/blob/dev/docs/manual/en/introduction/How-to-dispose-of-objects.html
+			function createGUI() {
+				"use strict";
+				var guifolder, guiOptionsFolder, guiShaderFolder, guiAdvancedShaderFolder;
+				var guiitem, guiOptionsExtraItems, guiExtraFolders;
+				var guiDebugType;
+				var params = {
+					'Version': version,
+					'three.js': "r" + THREE.REVISION,
+					'Resolution': window.innerWidth + "x" + window.innerHeight,
+					'File': fileInfo,
+					'#Atoms': (numPdbAtoms).toString(),
+					'FPS': 0,
+					'Mem': 0,
+					'MS/Frame': "",
+					'Debug Msg': "",
+					'Screenshot': function() {},
+					//'Mesh / 3D Spheres': function() {},
+					'Points / 2D Sprites': function() {},
+					'Points / Shaders': function() {},
+					'Debug Shaders': 0,
+					'Console: Renderer Info': function() {}
+				};
+				var commonOptions = {
+					'Show Box': false,
+					'Show Axes': false,
+					'Show Lines': false,
+					'Track Atoms': true,
+					'Size': initialPointSize
+				};
+				var meshOptions = {
+					'Vertical slices': 12,
+					'Horizontal slices': 12,
+					'Wireframe': false
+				};
+				shaderOptions = {
+					'Shape': true,
+					'Size': true,
+					'Color': true,
+					'Border': true,
+					'Shade': true,
+					'Fog': true,
+					'Depth': true
+				};
+				var advancedShaderOptions = {
+					'Sphere volume': false,
+					'Anti-aliasing': false,
+					'Depth of field': false,
+					'Ambient occlusion': false,
+					'Long range illumination': false,
+					'Translucency': false,
+					'Transparency': false,
+					'Reflexions': false
+				};
+				guiOptionsFolder = null;
+				guiShaderFolder = null;
+				guiAdvancedShaderFolder = null;
+				guiOptionsExtraItems = [];
+				guiExtraFolders = [];
+				gui = new dat.GUI();
+				gui.width = 350;
+				guifolder = gui.addFolder('Info');
+				guifolder.add( params, 'Version' );
+				guifolder.add( params, 'three.js' );
+				guiRes = guifolder.add( params, 'Resolution' );
+				if( fileInfo != "" ) guifolder.add( params, 'File' );
+				guifolder.add( params, '#Atoms' );
+				guiFps = guifolder.add( params, 'FPS' );
+				if(window.performance.memory) guiMem = guifolder.add( params, 'Mem' );
+				else guiMem = null;
+				guiMspf = guifolder.add( params, 'MS/Frame' );
+				guiDebugMessage = guifolder.add( params, 'Debug Msg' );
+				guifolder.add( params, 'Screenshot' ).onChange( takeScreenshot );
+				guifolder.open();
+				/*
+				rendering = "Mesh";
+				guifolder = gui.addFolder('Rendering');
+				guifolder.add( params, 'Mesh / 3D Spheres' ).onChange( function ( val ) {
+					if(rendering == "Mesh") return;
+					resetGui();
+					addGuiMeshOptions();
+					scene = meshScene;
+					rendering = "Mesh";
+				} );
+				*/
+				rendering = "Shaders";
+				function setSpritesRendering(){
+					if(rendering == "Sprites") return;
+					resetGui();
+					//addGuiLogOption();
+					//addGuiLinesOption();
+					scene = pointsScene;
+					points.material = materials['basic'];
+					rendering = "Sprites";
+				};
+				function setShadersRendering(){
+					if(rendering == "Shaders") return;
+					scene = pointsScene;
+					points.material = materials['shader'];
+					resetGui();
+					//addGuiLinesOption();
+					addGuiTrackOption();
+					addGuiLogOption();
+					guiShaderFolder = gui.addFolder('Point Shader Features');
+					guiShaderFolder.add( shaderOptions, 'Size' ).onChange( function ( val ) {
+						updatePointsMaterial();
+					} );
+					guiShaderFolder.add( shaderOptions, 'Color' ).onChange( function ( val ) {
+						updatePointsMaterial();
+					} );
+					guiShaderFolder.add( shaderOptions, 'Shape' ).onChange( function ( val ) {
+						updatePointsMaterial();
+					} );
+					guiShaderFolder.add( shaderOptions, 'Border' ).onChange( function ( val ) {
+						updatePointsMaterial();
+					} );
+					guiShaderFolder.add( shaderOptions, 'Shade' ).onChange( function ( val ) {
+						updatePointsMaterial();
+					} );
+					guiShaderFolder.add( shaderOptions, 'Fog' ).onChange( function ( val ) {
+						updatePointsMaterial();
+					} );
+					guiShaderFolder.add( shaderOptions, 'Depth' ).onChange( function ( val ) {
+						updatePointsMaterial();
+					} );
+					guiExtraFolders.push(guiShaderFolder);
+					guiAdvancedShaderFolder = gui.addFolder('Advanced Shaders');
+					var optionsKeys = Object.keys(advancedShaderOptions);
+					for( var i = 0 ; i != optionsKeys.length ; i++ ){
+						guiAdvancedShaderFolder.add( advancedShaderOptions, optionsKeys[i] ).onChange( function ( val ) {
+							updatePointsMaterial();
+						} );
+					}
+					guiExtraFolders.push(guiAdvancedShaderFolder);
+					rendering = "Shaders";
+				}
+				guifolder.add( params, 'Points / 2D Sprites' ).onChange( setSpritesRendering );
+				guifolder.add( params, 'Points / Shaders' ).onChange( setShadersRendering );
+				guiDebugType = guifolder.add( params, 'Debug Shaders',
+					{'None':						0,
+					'Gradient / Point 2D Coords':	1,
+					'Gradient / Screen 2D Coords':	2,
+					'Greyscale / Depth':			3,
+					'RGB Color / 3D Position':		4,
+					'Hue Color / ID':				5,
+					'Test: VertexID':				6,
+					'Test: Data textures':			7,
+					'Test: Texture':				8,
+					'Test: Matrix':					9,
+					'Test: Vectors':				10,
+					'Test: Volume (Z-buffer)':		11,
+					'Test: Volume (Geometric)':		12,
+					'Test: Transforms':				13,
+					'Test: Proximity':				14,
+					'Test: Ellipses':				15,
+					'Test: Occlusion':				16,
+					'Test: Long Range Occlusion':	17,
+					'Test: Depth of Field':			18,
+					'Test: Reflection':				19}
+					).onFinishChange( function ( val ) {
+						resetGui();
+						addGuiTrackOption();
+						addGuiLogOption();
+						switch ( val ) {
+							case '0':
+								setShadersRendering();
+								return;
+							case '1':
+								materials['debug'].fragmentShader = document.getElementById( 'debugPtCoordsFS' ).textContent;
+								break;
+							case '2':
+								materials['debug'].fragmentShader = document.getElementById( 'debugScrCoordsFS' ).textContent;
+								break;
+							case '3':
+								materials['debug'].fragmentShader = document.getElementById( 'debugDepthFS' ).textContent;
+								break;
+							case '4':
+								materials['debug'].fragmentShader = document.getElementById( 'debugPosFS' ).textContent;
+								break;
+							case '5':
+								materials['debug'].fragmentShader = document.getElementById( 'debugIdFS' ).textContent;
+								break;
+							case '6':
+								materials['debug'].fragmentShader = document.getElementById( 'debugVertexIdFS' ).textContent;
+								break;
+							case '7':
+								materials['debug'].fragmentShader = document.getElementById( 'debugDataTexturesFS' ).textContent;
+								break;
+							case '8':
+								materials['debug'].fragmentShader = document.getElementById( 'debugTextureFS' ).textContent;
+								break;
+							case '9':
+								materials['debug'].fragmentShader = document.getElementById( 'debugMatrixFS' ).textContent;
+								break;
+							case '10':
+								materials['debug'].fragmentShader = document.getElementById( 'debugVectorsFS' ).textContent;
+								break;
+							case '11':
+								materials['debug'].fragmentShader = document.getElementById( 'debugZBufferVolumeFS' ).textContent;
+								break;
+							case '12':
+								materials['debug'].fragmentShader = document.getElementById( 'debugVolumeFS' ).textContent;
+								break;
+							case '13':
+								materials['debug'].fragmentShader = document.getElementById( 'debugTransformsFS' ).textContent;
+								break;
+							case '14':
+								materials['debug'].fragmentShader = document.getElementById( 'debugProximityFS' ).textContent;
+								break;
+							case '15':
+								materials['debug'].fragmentShader = document.getElementById( 'debugEllipsesFS' ).textContent;
+								break;
+							case '16':
+								materials['debug'].fragmentShader = document.getElementById( 'debugOcclusionFS' ).textContent;
+								break;
+							case '17':
+								materials['debug'].fragmentShader = document.getElementById( 'debugLongRangeOcclusionFS' ).textContent;
+								break;
+							case '18':
+								materials['debug'].fragmentShader = document.getElementById( 'debugDepthOfFieldFS' ).textContent;
+								break;
+							case '19':
+								materials['debug'].fragmentShader = document.getElementById( 'debugReflectionFS' ).textContent;
+								break;
+							default:
+								break;
+						}
+						if( val == 7 || val == 17 ){ // enable transparency in "data textures" and "depth of field" options
+							materials['debug'].blendSrc = THREE.SrcAlphaFactor; // this will be multiplied by the source color
+							materials['debug'].blendDst = THREE.OneMinusSrcAlphaFactor; // this will be multiplied by the destination color
+						} else {
+							materials['debug'].blendSrc = THREE.OneFactor; // source = fragment about to be drawn
+							materials['debug'].blendDst = THREE.ZeroFactor; // destination = fragment already there
+						}
+						materials['debug'].needsUpdate = true;
+						points.material = materials['debug'];
+						scene = pointsScene;
+						rendering = "Debug";
+					} );
+				guifolder.open();
+				guiOptionsFolder = gui.addFolder('Options');
+				guiOptionsFolder.add( commonOptions, 'Show Box' ).onChange( function ( val ) {
+					if ( val ){
+						meshBoxHelper.visible = true;
+						pointsBoxHelper.visible = true;
+					} else {
+						meshBoxHelper.visible = false;
+						pointsBoxHelper.visible = false;
+					}
+				} );
+				guiOptionsFolder.add( commonOptions, 'Show Axes' ).onChange( function ( val ) {
+					if ( val ){
+						meshAxesHelper.visible = true;
+						pointsAxesHelper.visible = true;
+					} else {
+						meshAxesHelper.visible = false;
+						pointsAxesHelper.visible = false;
+					}
+				} );
+				guiOptionsFolder.add( commonOptions, 'Size', 0.1, 2.0, 0.05 ).onChange( function ( val ) {
+					/*
+					spheresMesh.traverse( function(obj){
+						if( obj.isMesh ) obj.scale.set(val, val, val);
+					} );
+					*/
+					materials['basic'].uniforms.sizeMult.value = val;
+					materials['debug'].uniforms.sizeMult.value = val;
+					materials['shader'].uniforms.sizeMult.value = val;
+				} );
+				function addGuiLogOption(){
+					guiitem = guiOptionsFolder.add( params, 'Console: Renderer Info' ).onChange( function ( val ) {
+						console.log(window.performance);
+						console.log(renderer.info);
+						console.log(renderer.capabilities);
+						console.log(renderer.extensions.get('WEBGL_draw_buffers'));
+						console.log(renderer.extensions.get('EXT_frag_depth'));
+						console.log(renderer.extensions.get('OES_texture_float'));
+						console.log(renderer.extensions.get('OES_texture_half_float'));
+						console.log(renderer.extensions.get('OES_element_index_uint'));
+						console.log(renderer.extensions.get('WEBGL_debug_renderer_info'));
+						console.log(renderer.getContextAttributes());
+						console.log(renderer.getContext().getSupportedExtensions());
+					} );
+					guiOptionsExtraItems.push(guiitem);
+				};
+				function addGuiLinesOption(){
+					guiitem = guiOptionsFolder.add( commonOptions, 'Show Lines' ).onChange( function ( val ) {
+						showLines = val;
+						if(val)	lines.visible = true;
+						else lines.visible = false;
+					} );
+					guiOptionsExtraItems.push(guiitem);
+				};
+				function addGuiTrackOption(){
+					guiitem = guiOptionsFolder.add( commonOptions, 'Track Atoms' ).onChange( function ( val ) {
+						trackAtoms = val;
+						document.getElementById("info").style.display = ( val ? "block" : "none" );
+						document.getElementById("info").innerHTML = "";
+					} );
+					guiOptionsExtraItems.push(guiitem);
+				};
+				function addGuiMeshOptions(){
+					guiitem = guiOptionsFolder.add( meshOptions, 'Horizontal slices', 2, 32, 1 ).onFinishChange( function ( val ) {
+						spheresMesh.traverse( function(obj){
+							if( obj.isMesh ) {
+								var newGeometry = new THREE.SphereGeometry( obj.geometry.parameters.radius, meshOptions['Vertical slices'], val );
+								obj.geometry.dispose();
+								obj.geometry = newGeometry;
+							}
+						} );
+					} );
+					guiOptionsExtraItems.push(guiitem);
+					guiitem = guiOptionsFolder.add( meshOptions, 'Vertical slices', 3, 32, 1 ).onFinishChange( function ( val ) {
+						spheresMesh.traverse( function(obj){
+							if( obj.isMesh ) {
+								var newGeometry = new THREE.SphereGeometry( obj.geometry.parameters.radius, val, meshOptions['Horizontal slices'] );
+								obj.geometry.dispose();
+								obj.geometry = newGeometry;
+							}
+						} );
+					} );
+					guiOptionsExtraItems.push(guiitem);
+					guiitem = guiOptionsFolder.add( meshOptions, 'Wireframe' ).onChange( function ( val ) {
+						if ( val ){
+							spheresMesh.traverse( function(obj){
+								if( obj.isMesh ) obj.material.wireframe = true;
+							} );
+						} else {
+							spheresMesh.traverse( function(obj){
+								if( obj.isMesh ) obj.material.wireframe = false;
+							} );
+						}
+					} );
+					guiOptionsExtraItems.push(guiitem);
+					addGuiTrackOption();
+					addGuiLinesOption();
+					addGuiLogOption();
+				};
+				function resetGui(){
+					params['Debug Shaders'] = 0;
+					//guiDebugType.setValue(0); // commented out to prevent infinite recursion
+					guiDebugType.updateDisplay();
+					for(var i=(guiExtraFolders.length-1); i>=0; i--){
+						gui.removeFolder(guiExtraFolders[i]);
+						guiExtraFolders.pop();
+					}
+					guiExtraFolders = [];
+					for(var i=(guiOptionsExtraItems.length-1); i>=0; i--){
+						guiOptionsFolder.remove(guiOptionsExtraItems[i]);
+						guiOptionsExtraItems.pop();
+					}
+					guiOptionsExtraItems = [];
+				};
+				/*
+				addGuiMeshOptions();
+				*/
+				setShadersRendering();
+			}
+
+			function createDataTextures(){
+				"use strict";
+				//var textureNearNeighbors, textureFarNeighbors;
+				var data, width, height, size, i, j;
+				
+				width = Math.ceil( Math.sqrt(numPdbAtoms) ); // create square texture
+				height = width;
+				size = width * height * 4; // 4 values (coordinates x, y, z and element type w) for each atom ; format: THREE.RGBAFormat
+				data = new Float32Array(size); // it would be enough to use a "Float16Array", but it does not exist in Javascript
+				var elements = "HCNOS";
+				/* Texture: AtomCoordinates */
+				j = 0;
+				for (i = 0; i != numPdbAtoms; i++){
+					data[j++] = pdbAtoms[i].x; // j=(i*4)+0
+					data[j++] = pdbAtoms[i].y; // j=(i*4)+1
+					data[j++] = pdbAtoms[i].z; // j=(i*4)+2
+					data[j++] = elements.indexOf( pdbAtoms[i].atomElem ); // j=(i*4)+3
+				}
+				while(j != size) data[j++] = 0.0;
+				/* TODO: use THREE.HalfFloatType here instead: convert floats to "IEEE 754 (binary16)" format and store in a "UInt16Array" */
+				textureAtomCoordinates = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+				textureAtomCoordinates.needsUpdate = true;
+				texture1StrideSize = width;
+				
+				width = Math.ceil( Math.sqrt(numPdbAtoms * 2) ); // create square texture with 2 triplets for each atom (6 neighbor atoms' ids)
+				i = (width % 2);
+				if( i != 0 ) width += (2 - i); // round to a multiple of 2
+				height = width;
+				size = width * height * 3; // each texel entry will have 3 values (THREE.RGBFormat); each atom will have 2 associated texels (6 values in total)
+				data = new Float32Array(size); // able to store atom ids up to 2^32 (?)
+				/* Texture: NearNeighbors */
+				j = 0;
+				for (i = 0; i != numPdbAtoms; i++){
+					data[j++] = closestAtomsArray[0][i]; // j=(i*6)+0
+					data[j++] = closestAtomsArray[1][i]; // j=(i*6)+1
+					data[j++] = closestAtomsArray[2][i]; // j=(i*6)+2
+					data[j++] = closestAtomsArray[3][i]; // j=(i*6)+3
+					data[j++] = closestAtomsArray[4][i]; // j=(i*6)+4
+					data[j++] = closestAtomsArray[5][i]; // j=(i*6)+5
+				}
+				while(j != size) data[j++] = 0.0;
+				/* TODO: find way to use THREE.UnsignedIntType and Uint32Array here */
+				/* TODO: check if using only 4 near atoms is enough (and with THREE.RGBAFormat) */
+				textureNearNeighbors = new THREE.DataTexture(data, width, height, THREE.RGBFormat, THREE.FloatType);
+				textureNearNeighbors.needsUpdate = true;
+				texture2StrideSize = width;
+			}
+
+			// TODO: use gl_VertexID instead of passing atom id!
+			function createMaterials(){
+				"use strict";
+				materials = {};
+
+				// TODO: instead of using attribute "id", enable Indexed Rendering and use "gl_VertexID"  (and benchmark change!)
+				// TODO: instead of using attributes "color" and "size", use define'd array of element properties
+				pointVS_start = `
+					precision highp float;
+
+					uniform mat4 modelViewMatrix;
+					uniform mat4 projectionMatrix;
+
+					uniform float sizeMult;
+
+					attribute vec3 position;
+					attribute vec3 color;
+					attribute float size;
+
+					varying vec4 vColor;
+					varying float vLinearDepth;
+					varying float vDepthChange;
+
+					void main() {
+						/* position relative to camera; camera at (0,0,0) facing -Z axis */
+						vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+						gl_Position = projectionMatrix * mvPosition;
+						gl_PointSize = 1.0;
+						vColor = vec4(1.0);
+				`;
+				pointVS_end = `}`;
+				pointVS_middle = {};
+				pointVS_middle['Size'] = `gl_PointSize = ( sizeMult * (2.0*size) * POINT_SIZE_WEIGHT ) / (-mvPosition.z);`;
+				pointVS_middle['Color'] = `vColor = vec4( color, 1.0 );`;
+				pointVS_middle['Shape'] = ``;
+				pointVS_middle['Shade'] = ``;
+				pointVS_middle['Border'] = ``;
+				pointVS_middle['Fog'] = `
+					/* depth in FS is between 0.0 (near) and 1.0 (far) */
+					vLinearDepth = ((-mvPosition.z) - CAMERA_NEAR) / (CAMERA_FAR - CAMERA_NEAR);
+				`;
+				pointVS_middle['Depth'] = `
+					/* sphere center position elevated by its radius towards the camera */
+					mvPosition += vec4(0.0, 0.0, (1.0 * sizeMult * size), 0.0);
+					mvPosition = projectionMatrix * mvPosition;
+					/* depth value variation between center position and elevated position ; depth values (z/w) are between -1.0 (near) and +1.0 (far) */
+					vDepthChange = (gl_Position.z / gl_Position.w) - (mvPosition.z / mvPosition.w);
+					/* difference of depths now between 0.0 (near) and +1.0 (far) , the depth range used in the FS */
+					vDepthChange = vDepthChange * 0.5;
+				`;
+
+				// TODO: Create "Unified Shader" with "#ifdef"'s
+				pointFS_start = `
+					#extension GL_EXT_frag_depth : enable
+
+					precision highp float;
+
+					varying vec4 vColor;
+					varying float vLinearDepth;
+					varying float vDepthChange;
+
+					void main() {
+						gl_FragColor = vColor;
+						/* gl_PointCoord between (0,0) and (1,1) */
+						float distanceFromCenter = 2.0 * distance( gl_PointCoord , vec2(0.5, 0.5) );
+				`;
+				pointFS_end = `}`;
+				pointFS_middle = {};
+				pointFS_middle['Size'] = ``;
+				pointFS_middle['Color'] = ``;
+				pointFS_middle['Shape'] = `if( distanceFromCenter > 1.0 ) discard;`;
+				pointFS_middle['Border'] = `if( distanceFromCenter > 0.975 ) gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);`;
+				pointFS_middle['Shade'] = `gl_FragColor = gl_FragColor * ( (1.0 - distanceFromCenter) + 0.25 );`;
+				pointFS_middle['Fog'] = `
+					/* depth value (gl_FragCoord.z) between 0.0 (close) and 1.0 (far) */
+					/* only apply fog on the farthest range , with linearDepth > 0.5 */
+					float fogVal = 1.0 - max(0.0, vLinearDepth - 0.5) * 2.0;
+					gl_FragColor = gl_FragColor * vec4( vec3(fogVal) , 1.0 );
+				`;
+				pointFS_middle['Depth'] = `
+					/* formula = sqrt( R^2 - D^2 ) ; R = radius, D = distanceFromCenter ; value between 1.0 and 0.0 */
+					float elevation = sqrt( 1.0 - distanceFromCenter * distanceFromCenter ); 
+					/* depth value (gl_FragCoord.z) between 0.0 (close) and 1.0 (far) */
+					gl_FragDepthEXT = (gl_FragCoord.z - elevation * vDepthChange);
+				`;
+
+				materials['shader'] = new THREE.RawShaderMaterial( {
+					defines: {
+						CAMERA_NEAR:	(camera.near).toFixed(1),
+						CAMERA_FAR:		(camera.far).toFixed(1),
+						/* weight = vres / (2*tan(fov/2)) */
+						POINT_SIZE_WEIGHT: 	( (window.innerHeight) / (2.0 * Math.tan( (camera.fov / 2.0) * (Math.PI / 180.0) ) ) )
+					},
+					uniforms: {
+						sizeMult:	{value: initialPointSize}
+					},
+					vertexShader:	(pointVS_start + pointVS_end),
+					fragmentShader:	(pointFS_start + pointFS_end),
+					// TODO: replace this by a check to a define (atom type) inside the shader
+					vertexColors:	THREE.VertexColors
+				} );
+				/*
+				materials['shader'].transparent = true;
+				materials['shader'].opacity = 0.5;
+				*/
+
+				/*
+				var elementsPropertiesArray = [ // color (3xfloats) and radius (1xfloat) for elements H,C,N,O,S
+					new THREE.Vector4(1.00,1.00,1.00, 1.20),
+					new THREE.Vector4(0.25,0.25,0.25, 1.70),
+					new THREE.Vector4(0.00,0.00,1.00, 1.55),
+					new THREE.Vector4(1.00,0.00,0.00, 1.52),
+					new THREE.Vector4(1.00,1.00,0.00, 1.80)
+				];
+				*/
+
+				materials['debug'] = new THREE.RawShaderMaterial( {
+					defines: {
+						// color (3xfloats) and radius (1xfloat) for elements H,C,N,O,S
+						"elemsProps_0":	"vec4(1.00,1.00,1.00, 1.20)",
+						"elemsProps_1":	"vec4(0.25,0.25,0.25, 1.70)",
+						"elemsProps_2":	"vec4(0.00,0.00,1.00, 1.55)",
+						"elemsProps_3":	"vec4(1.00,0.00,0.00, 1.52)",
+						"elemsProps_4":	"vec4(1.00,1.00,0.00, 1.80)",
+						cameraNear:		camera.near + ".0",
+						cameraFar:		camera.far + ".0",
+						fieldOfView:	camera.fov + ".0",
+						aspectRatio:	(camera.aspect).toFixed(6),
+						resolution:		"vec2(" + window.innerWidth + "," + window.innerHeight + ")",
+						rangeMin:		"vec3(" + minCoords[0] + "," + minCoords[1] + "," + minCoords[2] + ")",
+						rangeMax:		"vec3(" + maxCoords[0] + "," + maxCoords[1] + "," + maxCoords[2] + ")",
+						coordsCenter:	"vec3(" + (maxCoords[0]+minCoords[0])/2.0 + ","
+										+ (maxCoords[1]+minCoords[1])/2.0 + ","
+										+ (maxCoords[2]+minCoords[2])/2.0 + ")",
+						coordsRange:	"vec3(" + Math.abs(maxCoords[0]-minCoords[0]) + ","
+										+ Math.abs(maxCoords[1]-minCoords[1]) + ","
+										+ Math.abs(maxCoords[2]-minCoords[2]) + ")",
+						numAtoms:		numPdbAtoms + ".0",
+						tex1Dim:		texture1StrideSize + ".0",
+						tex2Dim:		texture2StrideSize + ".0"
+					},
+					uniforms: {
+						cameraPosition: {value: camera.position},
+						cameraFront:	{value: cameraFront},
+						cameraRight:	{value: cameraRight},
+						cameraUp:		{value: cameraUp},
+						sizeMult:		{value: initialPointSize},
+						//elemsProps:		{type: 'v4v', value: elementsPropertiesArray }, // uniform vec4 elemsProps[5];
+						tAtomsCoords:	{value: textureAtomCoordinates},
+						tNearAtoms:		{value: textureNearNeighbors},
+					},
+					vertexShader:	document.getElementById( 'debugVS' ).textContent,
+					fragmentShader:	document.getElementById( 'debugPtCoordsFS' ).textContent
+				} );
+				materials['debug'].blending = THREE.CustomBlending;
+				materials['debug'].blendEquation = THREE.AddEquation;
+				materials['debug'].blendSrc = THREE.OneFactor; // source = fragment about to be drawn
+				materials['debug'].blendDst = THREE.ZeroFactor; // destination = fragment already there
+				// NOTE: this enables transparency
+				//materials['debug'].blendSrc = THREE.SrcAlphaFactor; // this will be multiplied by the source color
+				//materials['debug'].blendDst = THREE.OneMinusSrcAlphaFactor; // this will be multiplied by the destination color
+			}
+
+			function updatePointsMaterial(){
+				"use strict";
+				var option, vertexShader, fragmentShader;
+				vertexShader = pointVS_start;
+				fragmentShader = pointFS_start;
+				for( option in shaderOptions ){
+					if( shaderOptions[option] ){
+						vertexShader += pointVS_middle[option];
+						fragmentShader += pointFS_middle[option];
+					}
+				}
+				vertexShader += pointVS_end;
+				fragmentShader += pointFS_end;
+				materials['shader'].vertexShader = vertexShader;
+				materials['shader'].fragmentShader = fragmentShader;
+				materials['shader'].needsUpdate = true;
+			}
+
+			function generateSphereSprite() {
+				"use strict";
+				var canvas = document.createElement('canvas');
+				var size = 64;
+				canvas.width = size;
+				canvas.height = size;
+				var context = canvas.getContext('2d');
+				//var gradient = context.createRadialGradient( size/4, size/4, 0, size/2, size/2, size/2);
+				var gradient = context.createRadialGradient( size/2.5, size/2.5, size/8, size/2, size/2, size/2);
+				gradient.addColorStop( 0.00, 'white' );
+				//gradient.addColorStop( 0.50, 'grey'  );
+				gradient.addColorStop( 0.75, 'grey'  );
+				gradient.addColorStop( 1.00, 'black' );
+				context.fillStyle = gradient;
+				context.fillRect(0, 0, canvas.width, canvas.height);
+				var texture = new THREE.Texture(canvas);
+				texture.needsUpdate = true;
+				texture.flipY = false;
+				return texture;
+			}
+
+			function loadDataAsMesh(){
+				"use strict";
+				var mesh, geometry, material;
+				var i, elem;
+				spheresMesh = new THREE.Group();
+				for( i = 0; i < numPdbAtoms; i++ ){
+					elem = pdbAtoms[i].atomElem;
+					if(elementProperties[elem] === undefined){
+						console.log(pdbAtoms[i]);
+						continue;
+					}
+					geometry = new THREE.SphereGeometry( elementProperties[elem].radius , 12, 12 );
+					material = new THREE.MeshPhongMaterial( {color: elementProperties[elem].color} );
+					mesh = new THREE.Mesh( geometry, material );
+					mesh.position.set( pdbAtoms[i].x, pdbAtoms[i].y, pdbAtoms[i].z);
+					mesh.scale.setScalar(initialPointSize); // to start with the default value of the "Size" GUI option
+					mesh.userData = {atomId: i};
+					spheresMesh.add( mesh );
+				}
+				meshScene.add( spheresMesh );
+			}
+
+			function loadDataAsPoints(){
+				"use strict";
+				var geometry;
+				var sprite, defines, uniforms;
+				var elem;
+				var positions = [];
+				var colors = [];
+				var sizes = [];
+				var ids = [];
+
+				var color = new THREE.Color();
+				geometry = new THREE.BufferGeometry();
+				
+				for(var i = 0 ; i < numPdbAtoms ; i++ ){
+					elem = pdbAtoms[i].atomElem;
+					if(elementProperties[elem] === undefined){
+						console.log(pdbAtoms[i]);
+						continue;
+					}
+					positions.push( pdbAtoms[i].x , pdbAtoms[i].y , pdbAtoms[i].z );
+					color.set( elementProperties[elem].color );
+					colors.push( color.r , color.g , color.b );
+					sizes.push( elementProperties[elem].radius );
+					ids.push( i );
+				}
+				geometry.addAttribute( 'position', new THREE.Float32BufferAttribute( positions, 3 ) );
+				/* TODO: replace 'color' and 'size' attributes by defines by element (from textureAtomElements array) */
+				geometry.addAttribute( 'color', new THREE.Float32BufferAttribute( colors, 3 ) );
+				geometry.addAttribute( 'size', new THREE.Float32BufferAttribute( sizes, 1 ) );
+				/* TODO: replace 'id' attribute by "gl_VertexID" variable inside shader, by enabling Indexed Rendering (and benchmark change!) */
+				//geometry.addAttribute( 'id', new THREE.Uint32BufferAttribute( ids, 1 ) );
+				geometry.addAttribute( 'id', new THREE.Float32BufferAttribute( ids, 1 ) );
+				
+				sprite = generateSphereSprite();
+				//sprite = new THREE.TextureLoader().load( "./ball.png" );
+				//material = new THREE.PointsMaterial( { size: 2.5, map: sprite, vertexColors: THREE.VertexColors, alphaTest: 0.5, transparent: true } );
+				defines = {
+					cameraNear: cameraNear,
+					cameraFar: cameraFar,
+					POINT_SIZE_WEIGHT: 	( (window.innerHeight) / (2.0 * Math.tan( (camera.fov / 2.0) * (Math.PI / 180.0) ) ) )
+				};
+				uniforms = {
+					//time: { value: 1.0 },
+					//resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+					sizeMult: { value: initialPointSize },
+					texture: { value: sprite }
+				};
+				materials['basic'] = new THREE.RawShaderMaterial( {
+					defines:		defines,
+					uniforms:		uniforms,
+					vertexShader:	document.getElementById( 'pointVertexShader' ).textContent,
+					fragmentShader:	document.getElementById( 'pointFragmentShader' ).textContent,
+					vertexColors:	THREE.VertexColors
+					/*
+					blending:		THREE.AdditiveBlending,
+					depthTest:	false,
+					transparent:	true,
+					fog:			true,
+					extensions:	{fragDepth: true},
+					flatShading:	true
+					*/
+				} );
+				points = new THREE.Points( geometry, materials['shader'] );
+				points.matrixAutoUpdate = false;
+				points.updateMatrix();
+				pointsScene.add( points );
+			}
+
+			function onWindowResize() {
+				"use strict";
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				// The "resolution" uniform was converted to a define
+				//materials['debug'].uniforms.resolution.value.x = window.innerWidth;
+				//materials['debug'].uniforms.resolution.value.y = window.innerHeight;
+				materials['shader'].needsUpdate = true; // to update the defines, which depend on the screen resolution
+				guiRes.setValue(window.innerWidth + "x" + window.innerHeight);
+				guiRes.updateDisplay();
+			}
+
+			function onMouseMove( event ) {
+				"use strict";
+				//event.preventDefault();
+				mouse.x = event.clientX;
+				mouse.y = event.clientY;
+				normMouseCoords.x = ( event.clientX / window.innerWidth ) * 2 - 1;
+				normMouseCoords.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
+			}
+
+			function setDebugMsg(str){
+				guiDebugMessage.setValue(str);
+				guiDebugMessage.updateDisplay();
+			}
+			
+			function printVector3(v){
+				return String( "(" + (v.x).toFixed(2) + "," + (v.y).toFixed(2) + "," + (v.z).toFixed(2) + ")" );
+			}
+
+			function init(){
+				"use strict";
+				// NOTE: 'alpha' required to read the pixels' 8-bit alpha channel
+				renderer = new THREE.WebGLRenderer({ antialias: false , depth: true , alpha: true , preserveDrawingBuffer: false });
+				renderer.setSize(window.innerWidth, window.innerHeight);
+				renderer.extensions.get('EXT_frag_depth');
+				document.body.appendChild(renderer.domElement);
+				raycaster = new THREE.Raycaster();
+				mouse = new THREE.Vector2();
+				normMouseCoords = new THREE.Vector2();
+				window.addEventListener( 'resize', onWindowResize, false );
+				window.addEventListener( 'mousemove', onMouseMove, false );
+				//window.draggable = "true";
+				//window.addEventListener( 'drag', onMouseMove, false );
+				lastIntersectedObject = null;
+				createScene();
+				cameraNear = 1.0;
+				cameraFar = Math.ceil(7.5*Math.max(
+					Math.abs(minCoords[0]),Math.abs(minCoords[1]),Math.abs(minCoords[2]),
+					Math.abs(maxCoords[0]),Math.abs(maxCoords[1]),Math.abs(maxCoords[2])
+				));
+				createCamera();
+				cameraFront = new THREE.Vector3();
+				cameraUp = new THREE.Vector3();
+				cameraRight = new THREE.Vector3();
+				//cameraPerp = new THREE.Vector3();
+				//createCameraVectorsHelper();
+				controls = new THREE.TrackballControls( camera, renderer.domElement );
+				//loadDataAsMesh();
+				createDataTextures();
+				createMaterials();
+				loadDataAsPoints();
+				createLines();
+				createGUI();
+				updatePointsMaterial();
+				glContext = renderer.getContext();
+				pixelData = new Uint8Array(4);
+				//glContext = renderer.domElement.getContext('webgl');
+				//pixelData = new Uint8Array(glContext.drawingBufferWidth * glContext.drawingBufferHeight * 4);
+				/*
+				renderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+					generateMipmaps: false,
+					minFilter: THREE.LinearFilter,
+					magFilter: THREE.NearestFilter,
+					format: THREE.RGBAFormat
+				});
+				*/
+				//renderer.setRenderTarget();
+				//renderTarget = renderer.getRenderTarget();
+				trackAtoms = true;
+				showLines = false;
+				frames = 0;
+				msPerFrame = 0;
+				time = Date.now();
+				setDebugMsg("Min=(" + minCoords[0] + "," + minCoords[1] + "," + minCoords[2] + ") ; " +
+							"Max=(" + maxCoords[0] + "," + maxCoords[1] + "," + maxCoords[2] + ")");
+			}
+
+			function showPixelInfo(){
+				"use strict";
+				/*
+				// Fetch pixel using 2D Context (slower for single pixel)
+				var twodCanvas = document.createElement('canvas');
+				var twodContext = twodCanvas.getContext('2d');
+				var pixel;
+				var time, timeA, timeB;
+				time = Date.now();
+				// Usage: void ctx.drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight);
+				twodContext.drawImage(renderer.domElement, mouse.x, mouse.y, 1, 1, 0, 0, 1, 1);
+				// Usage : ImageData ctx.getImageData(sx, sy, sw, sh);
+				pixel = twodContext.getImageData(0, 0, 1, 1).data;
+				timeB = ( Date.now() - time );
+				guiDebugMessage.setValue( timeA + " " + timeB );
+				guiDebugMessage.updateDisplay();
+				*/
+				//renderer.render(scene, camera, renderTarget);
+				//renderer.readRenderTargetPixels(renderTarget, mouse.x, (window.innerHeight - mouse.y), 1, 1, pixelData);
+				//glContext.readPixels(0, 0, glContext.drawingBufferWidth, glContext.drawingBufferHeight, glContext.RGBA, glContext.UNSIGNED_BYTE, pixelData);
+				glContext.readPixels(mouse.x, (window.innerHeight - mouse.y), 1, 1, glContext.RGBA, glContext.UNSIGNED_BYTE, pixelData);
+				if( (pixelData[0] + pixelData[1] + pixelData[2]) == 0 && pixelData[3] == 255 ){ // check background color: (0,0,0,255)
+					document.getElementById("info").innerHTML = "";
+					return;
+				}
+				var floatVal = pixelData[0]*256.0 + pixelData[1]*1.0 + pixelData[2]*(1.0/256.0) + pixelData[3]*(1.0/65536.0);
+				if(pixelData[0] >= 128) floatVal = -1.0 * (floatVal - 128.0*256.0);
+				document.getElementById("info").innerHTML =
+						"(R:" + pixelData[0] + ",G:" + pixelData[1] + ",B:" + pixelData[2] + ",A:" + pixelData[3] + ")"
+						+ "<br/>"
+						+ "float = " + floatVal.toFixed(6);
+						+ "<br/>";
+				document.getElementById("info").style.left = mouse.x + 20 + "px";
+				document.getElementById("info").style.top = mouse.y - 20 + "px";
+				document.getElementById("info").style.display = "block";
+			}
+
+			function highlightObject(){
+				"use strict";
+				var atomId, intersections, i;
+				var k, otherId, dist;
+				raycaster.setFromCamera( normMouseCoords, camera );
+				if(lastIntersectedObject != null){
+					//var objectColor = elementProperties[ pdbAtoms[ lastIntersectedObject.userData.atomId ].atomElem ].color;
+					//lastIntersectedObject.material.color.set( objectColor );
+					lastIntersectedObject.material.emissive.set( 0x000000 );
+					document.getElementById("info").style.display = "none";
+				}
+				intersections = raycaster.intersectObjects( scene.children , true );
+				i = 0;
+				while( i < intersections.length && !(intersections[i].object.isMesh) ) i++; // go to first intersected mesh object
+				if( i != intersections.length && intersections[i].object.material.emissive != null ){
+					atomId =  intersections[i].object.userData.atomId;
+					if(trackAtoms){
+						//intersections[i].object.material.color.set( 0xff88ff );
+						intersections[i].object.material.emissive.set( 0xcccccc );
+						document.getElementById("info").innerHTML =
+							pdbAtoms[ atomId ].atomName
+							+ " (" + pdbAtoms[ atomId ].atomId + ")"
+							+ "<br/>" + pdbAtoms[ atomId ].resName.toUpperCase()
+							+ " (" + pdbAtoms[ atomId ].resId + ")";
+						document.getElementById("info").style.left = mouse.x + 20 + "px";
+						document.getElementById("info").style.top = mouse.y - 20 + "px";
+						document.getElementById("info").style.display = "block";
+					}
+					if(showLines){
+						if(lastIntersectedObject == null || atomId != lastIntersectedObject.userData.atomId) updateLines(atomId);
+						document.getElementById("info").innerHTML += "<br/>";
+						for(k=0; k!=6; k++){
+							otherId = closestAtomsArray[k][atomId];
+							dist = Math.pow( (pdbAtoms[atomId].x - pdbAtoms[otherId].x) , 2.0 );
+							dist += Math.pow( (pdbAtoms[atomId].y - pdbAtoms[otherId].y) , 2.0 );
+							dist += Math.pow( (pdbAtoms[atomId].z - pdbAtoms[otherId].z) , 2.0 );
+							dist = Math.sqrt(dist);
+							document.getElementById("info").innerHTML += "<br/>"
+								+ " id = " + otherId + "<br/>"
+								+ " coords = (" + (pdbAtoms[otherId].x) + "," + (pdbAtoms[otherId].y) + "," + (pdbAtoms[otherId].z) + ")" + "<br/>"
+								+ " dist = " + dist;
+						}
+					}
+					lastIntersectedObject = intersections[i].object;
+				} else lastIntersectedObject = null;
+			}
+
+			function animate(){
+				"use strict";
+				
+				msPerFrame -= performance.now();
+				render();
+				controls.update();
+				msPerFrame += performance.now();
+
+				if(rendering == "Mesh"){
+					light.position.copy(camera.position);
+					if(trackAtoms || showLines) highlightObject();
+				} else {
+					//updateCameraVectors();
+					camera.getWorldDirection(cameraFront);
+					cameraUp.copy(camera.up);
+					cameraRight.crossVectors(cameraFront, cameraUp);
+					cameraUp.normalize();
+					cameraRight.normalize();
+					if(trackAtoms) showPixelInfo();
+					//guiDebugMessage.setValue( "near=" + cameraNear + " far=" + cameraFar + " AR=" + (camera.aspect).toFixed(3) );
+					setDebugMsg( "Camera=" + printVector3(camera.position) + " Front=" + printVector3(cameraFront) + " Up=" + printVector3(cameraUp) + " Right=" + printVector3(cameraRight) );
+				}
+
+				frames++;
+				if(frames == 60){
+					guiFps.setValue( Math.floor( frames / ( (Date.now() - time) / 1000.0 ) ) );
+					guiFps.updateDisplay();
+					guiMspf.setValue( ( msPerFrame / frames ).toFixed(2) );
+					guiMspf.updateDisplay();
+					if(guiMem != null){
+						guiMem.setValue( window.performance.memory.usedJSHeapSize / (1000.0 * 1000.0) );
+						guiMem.updateDisplay();
+					}
+					frames = 0;
+					msPerFrame = 0;
+					time = Date.now();
+				}
+
+				return requestAnimationFrame(animate);
+			}
+
+		</script>
+
+		<!-- 'Drag and drop' code -->
+		<script>
+
+			function startThreeJS(){
+				document.getElementById("dropzone").style.display = "none";
+				getClosestAtoms(); // populate the "closestAtomsArray[6][numPdbAtoms]" array
+				//checkClosestAtoms();
+				init();
+				animate();
+			}
+
+			function getClosestAtoms(){
+				"use strict";
+				var i, sortedIds;
+				var k, coord, signal, loopEnd, s;
+				var j, id, otherId;
+				var coordDist, dist, lessClosestDist;
+				var distancesArray;
+				var numCompares = 0; // number of distance calculations performed, for performance evaluation purposes
+				closestAtomsArray = new Array(6); // closestAtomsArray[6][numPdbAtoms]
+				for(k = 0 ; k < 6 ; k++){
+					closestAtomsArray[k] = new Array(numPdbAtoms);
+					for(i = 0 ; i != numPdbAtoms ; i++) closestAtomsArray[k][i] = i;
+				}
+				sortedIds = new Array(numPdbAtoms);
+				for(i=0; i!=numPdbAtoms; i++) sortedIds[i] = i;
+				coord = 'x';
+				dist = 0.0;
+				for(k=0; k!=3; k++){ // get the coord with the widest range
+					coordDist = Math.abs(maxCoords[k] - minCoords[k]);
+					if(coordDist > dist){
+						coord = ("xyz").charAt(k);
+						dist = coordDist;
+					}
+				}
+				signal = (+1);
+				var sortFunction = function(a, b){
+					return (pdbAtoms[a][coord] - signal * pdbAtoms[b][coord]);
+				};
+				sortedIds.sort(sortFunction); // sort by the widest coord
+				var distFunction = function(a, b){
+					numCompares++;
+					return Math.sqrt(
+						Math.pow( pdbAtoms[b].x - pdbAtoms[a].x , 2 ) +
+						Math.pow( pdbAtoms[b].y - pdbAtoms[a].y , 2 ) +
+						Math.pow( pdbAtoms[b].z - pdbAtoms[a].z , 2 ) );
+				}
+				distancesArray = [0, 0, 0, 0, 0, 0]; // distances of the closest atoms to the current atom (id), sorted from closest (at 0) to farthest (at 5)
+				for(i = 0 ; i != numPdbAtoms ; i++){
+					id = sortedIds[i];
+					for(k = 0 ; k != 6 ; k++) distancesArray[k] = Infinity; // initialize distances array for the current atom id
+					lessClosestDist = Infinity;
+					for(s = 0 ; s != 2 ; s++){ // check in both directions
+						signal = ((-1) ** s); // one time for each sign (+1/-1)
+						if(signal == 1) loopEnd = numPdbAtoms; // +xyz
+						else loopEnd = (-1); // -xyz
+						coordDist = 0.0;
+						for(j = (i + signal); j != loopEnd; j += signal){ // check atoms in front and behind the current atom in the sorted (by single coordinate) array
+							otherId = sortedIds[j];
+							coordDist = Math.abs( pdbAtoms[otherId][coord] - pdbAtoms[id][coord] ); // straight-line coordinate distance
+							if( coordDist > lessClosestDist ) break; // if the absolute distance is already larger than the worse distance, stop checking
+							dist = distFunction(id, otherId);
+							if( dist > lessClosestDist ) continue; // dist > distancesArray[5]
+							for(k = 4; k != (-1); k--){ // process the distances array in reverse to find the right place to insert this atom
+								closestAtomsArray[(k+1)][id] = closestAtomsArray[k][id]; // move the current value to the position in front (to the right)
+								distancesArray[(k+1)] = distancesArray[k];
+								if(dist > distancesArray[k]) break; // if this position is already larger, place it in the previous position (to the right)
+							}
+							k++;
+							closestAtomsArray[k][id] = otherId;
+							distancesArray[k] = dist;
+							lessClosestDist = distancesArray[5];
+						} // end of loop for otherId
+					} // end of loop for signal
+				} // end of loop for id
+				//console.log("Total number of comparisons: " + numCompares);
+			}
+
+			function checkClosestAtoms(){
+				"use strict";
+				var id, otherId, k, bId;
+				var bestIds, bestDists;
+				var coordDist, dist;
+				var numCompares = 0; // number of distance calculations performed, for performance evaluation purposes
+				var distFunction = function(a, b){
+					return Math.sqrt(
+						Math.pow( pdbAtoms[b].x - pdbAtoms[a].x , 2 ) +
+						Math.pow( pdbAtoms[b].y - pdbAtoms[a].y , 2 ) +
+						Math.pow( pdbAtoms[b].z - pdbAtoms[a].z , 2 ) );
+				}
+				for(id=0; id<numPdbAtoms; id++){
+					bestIds = [id, id, id, id, id, id];
+					bestDists = [Infinity, Infinity, Infinity, Infinity, Infinity, Infinity];
+					for(otherId=0; otherId<numPdbAtoms; otherId++){
+						if(otherId==id) continue;
+						dist = 0.0;
+						coordDist = (pdbAtoms[otherId].x - pdbAtoms[id].x);
+						dist += coordDist*coordDist;
+						coordDist = (pdbAtoms[otherId].y - pdbAtoms[id].y);
+						dist += coordDist*coordDist;
+						coordDist = (pdbAtoms[otherId].z - pdbAtoms[id].z);
+						dist += coordDist*coordDist;
+						dist = Math.sqrt(dist);
+						numCompares++;
+						k = 5;
+						while((k >= 0) && (dist <= bestDists[k])){
+							if(k != 5){
+								bestIds[(k+1)] = bestIds[k];
+								bestDists[(k+1)] = bestDists[k];
+							}
+							bestIds[k] = otherId;
+							bestDists[k] = dist;
+							k--;
+						}
+					} // end of otherId loop
+					for(k=0; k<6; k++){
+						bId = closestAtomsArray[k][id];
+						if(bestIds[k] != bId){
+							console.log(id+"->"+bestIds[k]+"("+distFunction(id,bestIds[k])+") "+id+"->"+bId+"("+distFunction(id,bId)+")");
+						}
+					}
+				} // end of id loop
+				console.log("Total number of comparisons: " + numCompares);
+			}
+
+			/*
+			function getClosestAtomsPerDir(){
+				var i, sortedIds;
+				var k, coord, signal;
+				var j, id, otherId;
+				var coordDist, dist, bestId, bestDist;
+				var loopStart, loopEnd, loopSign;
+				closestAtomsPerDir = new Array(6);
+				sortedIds = new Array(numPdbAtoms);
+				for(i=0; i<numPdbAtoms; i++) sortedIds[i] = i;
+				var distFunction = function(a, b){
+					return Math.sqrt(
+						Math.pow( pdbAtoms[b].x - pdbAtoms[a].x , 2 ) +
+						Math.pow( pdbAtoms[b].y - pdbAtoms[a].y , 2 ) +
+						Math.pow( pdbAtoms[b].z - pdbAtoms[a].z , 2 ) );
+				}
+				var sortFunction = function(a, b){
+					return (pdbAtoms[a][coord] - signal * pdbAtoms[b][coord]);
+				};
+				for(k = 0 ; k < 6 ; k++){
+					closestAtomsPerDir[k] = new Array(numPdbAtoms); // [-X, +X, -Y, +Y, -Z, +Z]
+					coord = (['x','y','z'])[(k >> 1)]; // for each coord (X,Y,Z) (X: k=0,1 ; Y: k=2,3 ; Z: k=4,5) 
+					signal = ((-1) ** k); // one time for each sign (+1/-1) (+1: k=0,2,4 ; -1: k=1,3,5)
+					if(signal == 1){ // +X,+Y,+Z
+						loopStart = 0;
+						loopEnd = numPdbAtoms;
+						loopSign = +1;
+						sortedIds.sort(sortFunction); // only sort one time for each X, Y, Z
+					} else { // -X,-Y,-Z
+						loopStart = (numPdbAtoms-1);
+						loopEnd = (-1);
+						loopSign = -1; // process the array in reverse for the 2nd pass
+					}
+					for(i = loopStart ; i != loopEnd ; i += loopSign){
+						id = sortedIds[i];
+						bestId = id;
+						bestDist = Infinity;
+						coordDist = 0.0;
+						for(j = (i + loopSign); j != loopEnd; j += loopSign){
+							otherId = sortedIds[j];
+							coordDist = Math.abs( pdbAtoms[otherId][coord] - pdbAtoms[id][coord] );
+							if( coordDist > bestDist ) break;
+							dist = distFunction(id, otherId);
+							if(dist < bestDist){
+								bestId = otherId;
+								bestDist = dist;
+							}
+						}
+						closestAtomsPerDir[k][id] = bestId;
+					}
+				}
+			}
+
+			function checkClosestAtomsPerDir(){
+				var id, otherId, k, bId;
+				var bestIds, bestDists;
+				var coordDist, dist;
+				var distFunction = function(a, b){
+					return Math.sqrt(
+						Math.pow( pdbAtoms[b].x - pdbAtoms[a].x , 2 ) +
+						Math.pow( pdbAtoms[b].y - pdbAtoms[a].y , 2 ) +
+						Math.pow( pdbAtoms[b].z - pdbAtoms[a].z , 2 ) );
+				}
+				for(id=0; id<numPdbAtoms; id++){
+					bestIds = [id, id, id, id, id, id];
+					bestDists = [Infinity, Infinity, Infinity, Infinity, Infinity, Infinity];
+					for(otherId=0; otherId<numPdbAtoms; otherId++){
+						if(otherId==id) continue;
+						dist = 0.0;
+						coordDist = (pdbAtoms[otherId].x - pdbAtoms[id].x);
+						dist += coordDist*coordDist;
+						coordDist = (pdbAtoms[otherId].y - pdbAtoms[id].y);
+						dist += coordDist*coordDist;
+						coordDist = (pdbAtoms[otherId].z - pdbAtoms[id].z);
+						dist += coordDist*coordDist;
+						dist = Math.sqrt(dist);
+						if( (pdbAtoms[otherId].x > pdbAtoms[id].x) && (dist < bestDists[0]) ){
+							bestIds[0] = otherId;
+							bestDists[0] = dist;
+						}
+						if( (pdbAtoms[otherId].x < pdbAtoms[id].x) && (dist < bestDists[1]) ){
+							bestIds[1] = otherId;
+							bestDists[1] = dist;
+						}
+						if( (pdbAtoms[otherId].y > pdbAtoms[id].y) && (dist < bestDists[2]) ){
+							bestIds[2] = otherId;
+							bestDists[2] = dist;
+						}
+						if( (pdbAtoms[otherId].y < pdbAtoms[id].y) && (dist < bestDists[3]) ){
+							bestIds[3] = otherId;
+							bestDists[3] = dist;
+						}
+						if( (pdbAtoms[otherId].z > pdbAtoms[id].z) && (dist < bestDists[4]) ){
+							bestIds[4] = otherId;
+							bestDists[4] = dist;
+						}
+						if( (pdbAtoms[otherId].z < pdbAtoms[id].z) && (dist < bestDists[5]) ){
+							bestIds[5] = otherId;
+							bestDists[5] = dist;
+						}
+					} // end of otherId loop
+					for(k=0; k<6; k++){
+						bId = closestAtomsPerDir[k][id];
+						if(bestIds[k] != bId){
+							console.log(id+"->"+bestIds[k]+"("+distFunction(id,bestIds[k])+") "+id+"->"+bId+"("+distFunction(id,bId)+")");
+						}
+					}
+				} // end of id loop
+			}
+			*/
+
+			function dragEnterHandler(evt) {
+				evt.preventDefault();
+			}
+
+			function dragOverHandler(evt) {
+				evt.preventDefault();
+				evt.dataTransfer.dropEffect = "copy";
+			}
+
+			function dropHandler(evt) {
+				evt.preventDefault();
+				/*
+				if (evt.dataTransfer.items) {
+					if (evt.dataTransfer.items[0].kind === 'file') {
+						var file = evt.dataTransfer.items[0].getAsFile();
+						console.log(file.name);
+						evt.dataTransfer.items.clear();
+					}
+				}
+				*/
+				loadLocalFile(evt.dataTransfer.files);
+				evt.dataTransfer.clearData();
+			}
+
+			function parsePDBFile(file){
+				var lines, numlines, i, line;
+				var x, y, z, minX, minY, minZ, maxX, maxY, maxZ;
+				minX = Number.POSITIVE_INFINITY;
+				minY = Number.POSITIVE_INFINITY;
+				minZ = Number.POSITIVE_INFINITY;
+				maxX = Number.NEGATIVE_INFINITY;
+				maxY = Number.NEGATIVE_INFINITY;
+				maxZ = Number.NEGATIVE_INFINITY;
+				pdbAtoms = [];
+				numPdbAtoms = 0;
+				lines = file.split('\n');
+				numlines = lines.length;
+				for(i = 0; i < numlines; i++ ){
+					if(!lines[i].startsWith("ATOM")){
+						// NOTE: lines starting with "TER" are also attributed a (distinct) atomId,
+						// so the id of the last atom might be higher than the real total number of atoms
+						//if(numPdbAtoms!=0) console.log(lines[i]);
+						if(lines[i].startsWith("ENDMDL")) break;
+						else continue;
+					}
+					line = lines[i].split(/[\s]+/);
+					// process field by field in case some line is "corrupted" by adjacent fields with no separator
+					if(line.length < 13){ // 13 and not 12 because extra space at the end gets allocated an additional position
+						//line[0]  = lines[i].substring(0,6).trim();		// "ATOM  "
+						line[1]  = lines[i].substring(6,11).trim();		// serial
+						line[2]  = lines[i].substring(12,17).trim();	// name + altLoc
+						line[3]  = lines[i].substring(17,20).trim();	// resName
+						line[4]  = lines[i].substring(21,22).trim();	// chainID
+						line[5]  = lines[i].substring(22,27).trim();	// resSeq + iCode
+						line[6]  = lines[i].substring(30,38).trim();	// x
+						line[7]  = lines[i].substring(38,46).trim();	// y
+						line[8]  = lines[i].substring(46,54).trim();	// z
+						//line[9]  = lines[i].substring(54,60).trim();	// occupancy
+						//line[10] = lines[i].substring(60,66).trim();	// tempFactor
+						line[11] = lines[i].substring(76,78).trim();	// element
+						//line[12] = lines[i].substring(78,80).trim();	// charge
+						//console.log(line);
+					}
+					x = Number.parseFloat(line[6]);
+					y = Number.parseFloat(line[7]);
+					z = Number.parseFloat(line[8]);
+					if(x < minX) minX = x;
+					if(y < minY) minY = y;
+					if(z < minZ) minZ = z;
+					if(x > maxX) maxX = x;
+					if(y > maxY) maxY = y;
+					if(z > maxZ) maxZ = z;
+					pdbAtoms.push( { "atomId": line[1], "atomName": line[2], "resName": line[3], "chain": line[4], "resId": line[5], "x": x, "y": y, "z": z, "atomElem": line[11]} );
+					numPdbAtoms++;
+				}
+				minCoords = [minX, minY, minZ];
+				maxCoords = [maxX, maxY, maxZ];
+				/*
+				console.log(line);
+				console.log(pdbAtoms[0]);
+				console.log(pdbAtoms[numPdbAtoms-1]);
+				console.log(numPdbAtoms);
+				console.log(minCoords);
+				console.log(maxCoords);
+				*/
+			}
+
+			function loadRemoteFile(filename){
+				var xmlhttp = new XMLHttpRequest();
+				xmlhttp.onprogress = function(e){
+					if (e.lengthComputable) {
+						var percentLoaded = Math.round((e.loaded / e.total) * 100);
+						//progress.style.width = percentLoaded + '%';
+						document.getElementById("dropzone").textContent = percentLoaded + '%';
+					}
+				};
+				xmlhttp.onreadystatechange = function(){
+					if(xmlhttp.readyState == 4){ // readyState = 4: request finished and response is ready
+						if(xmlhttp.status == 200){ // status = 200: "OK"
+							parsePDBFile(xmlhttp.responseText);
+							startThreeJS();
+							console.log(xmlhttp.getResponseHeader("Content-Length"));
+							console.log(xmlhttp.getAllResponseHeaders());
+						} else { // status != 200
+							document.getElementById("dropzone").textContent = xmlhttp.statusText;
+						}
+					} else { // readyState != 4
+						document.getElementById("dropzone").textContent = "Loading file...";
+					}
+				};
+				xmlhttp.open("GET",filename,true);
+				//xmlhttp.overrideMimeType('text/plain');
+				//xmlhttp.responseType = 'text';
+				xmlhttp.send();
+			}
+
+			function loadLocalFile(files){
+				if (files.length == 0) return;
+				var file = files[0];
+				//if (!file.type.startsWith('text/')) return;
+				//console.log(file.name + " " + file.size + " " + file.type);
+				fileInfo = file.name + " (" + file.size + " bytes)";
+				document.getElementById("dropzone").textContent = "Loading file...";
+				var reader = new FileReader();
+				reader.onprogress = function(e){
+					if (e.lengthComputable) {
+						var percentLoaded = Math.round((e.loaded / e.total) * 100);
+						//progress.style.width = percentLoaded + '%';
+						document.getElementById("dropzone").textContent = percentLoaded + '%';
+					}
+				};
+				reader.onload = function(e){
+					//document.getElementById("dropzone").textContent = '100%';
+					parsePDBFile(reader.result);
+					startThreeJS();
+				};
+				reader.readAsText(file);
+			}
+
+			function loadBasicExample(){
+				pdbAtoms = [
+					{ "atomId":  1, "atomName": "+Z", "resName": "---", "resId": 1, "x":  0.0, "y":  0.0, "z":  1.0, "atomElem": "X"},
+					{ "atomId":  2, "atomName": "+X", "resName": "---", "resId": 1, "x":  1.0, "y":  0.0, "z":  0.0, "atomElem": "Y"},
+					{ "atomId":  3, "atomName": "-X", "resName": "---", "resId": 1, "x": -1.0, "y":  0.0, "z":  0.0, "atomElem": "Y"},
+					{ "atomId":  4, "atomName": "+Y", "resName": "---", "resId": 1, "x":  0.0, "y":  1.0, "z":  0.0, "atomElem": "Y"},
+					{ "atomId":  5, "atomName": "-Y", "resName": "---", "resId": 1, "x":  0.0, "y": -1.0, "z":  0.0, "atomElem": "Y"},
+					{ "atomId":  6, "atomName":  "W", "resName": "---", "resId": 2, "x": 10.0, "y": 10.0, "z": 10.0, "atomElem": "Z"},
+					{ "atomId":  7, "atomName":  "W", "resName": "---", "resId": 2, "x": 10.0, "y": 10.0, "z":-10.0, "atomElem": "Z"},
+					{ "atomId":  8, "atomName":  "W", "resName": "---", "resId": 2, "x": 10.0, "y":-10.0, "z": 10.0, "atomElem": "Z"},
+					{ "atomId":  9, "atomName":  "W", "resName": "---", "resId": 2, "x": 10.0, "y":-10.0, "z":-10.0, "atomElem": "Z"},
+					{ "atomId": 10, "atomName":  "W", "resName": "---", "resId": 2, "x":-10.0, "y": 10.0, "z": 10.0, "atomElem": "Z"},
+					{ "atomId": 11, "atomName":  "W", "resName": "---", "resId": 2, "x":-10.0, "y": 10.0, "z":-10.0, "atomElem": "Z"},
+					{ "atomId": 12, "atomName":  "W", "resName": "---", "resId": 2, "x":-10.0, "y":-10.0, "z": 10.0, "atomElem": "Z"},
+					{ "atomId": 13, "atomName":  "W", "resName": "---", "resId": 2, "x":-10.0, "y":-10.0, "z":-10.0, "atomElem": "Z"},
+					{ "atomId": 14, "atomName":  "w", "resName": "---", "resId": 2, "x":  9.0, "y":  9.0, "z":  9.0, "atomElem": "Z"},
+					{ "atomId": 15, "atomName":  "w", "resName": "---", "resId": 2, "x":  9.0, "y":  9.0, "z": -9.0, "atomElem": "Z"},
+					{ "atomId": 16, "atomName":  "w", "resName": "---", "resId": 2, "x":  9.0, "y": -9.0, "z":  9.0, "atomElem": "Z"},
+					{ "atomId": 17, "atomName":  "w", "resName": "---", "resId": 2, "x":  9.0, "y": -9.0, "z": -9.0, "atomElem": "Z"},
+					{ "atomId": 18, "atomName":  "w", "resName": "---", "resId": 2, "x": -9.0, "y":  9.0, "z":  9.0, "atomElem": "Z"},
+					{ "atomId": 19, "atomName":  "w", "resName": "---", "resId": 2, "x": -9.0, "y":  9.0, "z": -9.0, "atomElem": "Z"},
+					{ "atomId": 20, "atomName":  "w", "resName": "---", "resId": 2, "x": -9.0, "y": -9.0, "z":  9.0, "atomElem": "Z"},
+					{ "atomId": 21, "atomName":  "w", "resName": "---", "resId": 2, "x": -9.0, "y": -9.0, "z": -9.0, "atomElem": "Z"}
+				];
+				numPdbAtoms = 21;
+				minCoords = [-10.0, -10.0, -10.0];
+				maxCoords = [ 10.0,  10.0,  10.0];
+				startThreeJS();
+			}
+
+			function loadExample(){
+				// From: 1L2Y.pdb
+				pdbAtoms = [
+					{ "atomId": 1, "atomName": "N", "resName": "Asn", "resId": 1, "x": -8.901, "y": 4.127, "z": -0.555, "atomElem": "N"},
+					{ "atomId": 2, "atomName": "CA", "resName": "Asn", "resId": 1, "x": -8.608, "y": 3.135, "z": -1.618, "atomElem": "C"},
+					{ "atomId": 3, "atomName": "C", "resName": "Asn", "resId": 1, "x": -7.117, "y": 2.964, "z": -1.897, "atomElem": "C"},
+					{ "atomId": 4, "atomName": "O", "resName": "Asn", "resId": 1, "x": -6.634, "y": 1.849, "z": -1.758, "atomElem": "O"},
+					{ "atomId": 5, "atomName": "CB", "resName": "Asn", "resId": 1, "x": -9.437, "y": 3.396, "z": -2.889, "atomElem": "C"},
+					{ "atomId": 6, "atomName": "CG", "resName": "Asn", "resId": 1, "x": -10.915, "y": 3.130, "z": -2.611, "atomElem": "C"},
+					{ "atomId": 7, "atomName": "OD1", "resName": "Asn", "resId": 1, "x": -11.269, "y": 2.700, "z": -1.524, "atomElem": "O"},
+					{ "atomId": 8, "atomName": "ND2", "resName": "Asn", "resId": 1, "x": -11.806, "y": 3.406, "z": -3.543, "atomElem": "N"},
+					{ "atomId": 9, "atomName": "H", "resName": "Asn", "resId": 1, "x": -8.330, "y": 3.957, "z": 0.261, "atomElem": "H"},
+					{ "atomId": 10, "atomName": "HA", "resName": "Asn", "resId": 1, "x": -8.930, "y": 2.162, "z": -1.239, "atomElem": "H"},
+					{ "atomId": 11, "atomName": "HB2", "resName": "Asn", "resId": 1, "x": -9.310, "y": 4.417, "z": -3.193, "atomElem": "H"},
+					{ "atomId": 12, "atomName": "HB3", "resName": "Asn", "resId": 1, "x": -9.108, "y": 2.719, "z": -3.679, "atomElem": "H"},
+					{ "atomId": 13, "atomName": "HD21", "resName": "Asn", "resId": 1, "x": -11.572, "y": 3.791, "z": -4.444, "atomElem": "H"},
+					{ "atomId": 14, "atomName": "HD22", "resName": "Asn", "resId": 1, "x": -12.757, "y": 3.183, "z": -3.294, "atomElem": "H"},
+					{ "atomId": 15, "atomName": "N", "resName": "Leu", "resId": 2, "x": -6.379, "y": 4.031, "z": -2.228, "atomElem": "N"},
+					{ "atomId": 16, "atomName": "CA", "resName": "Leu", "resId": 2, "x": -4.923, "y": 4.002, "z": -2.452, "atomElem": "C"},
+					{ "atomId": 17, "atomName": "C", "resName": "Leu", "resId": 2, "x": -4.136, "y": 3.187, "z": -1.404, "atomElem": "C"},
+					{ "atomId": 18, "atomName": "O", "resName": "Leu", "resId": 2, "x": -3.391, "y": 2.274, "z": -1.760, "atomElem": "O"},
+					{ "atomId": 19, "atomName": "CB", "resName": "Leu", "resId": 2, "x": -4.411, "y": 5.450, "z": -2.619, "atomElem": "C"},
+					{ "atomId": 20, "atomName": "CG", "resName": "Leu", "resId": 2, "x": -4.795, "y": 6.450, "z": -1.495, "atomElem": "C"},
+					{ "atomId": 21, "atomName": "CD1", "resName": "Leu", "resId": 2, "x": -3.612, "y": 6.803, "z": -0.599, "atomElem": "C"},
+					{ "atomId": 22, "atomName": "CD2", "resName": "Leu", "resId": 2, "x": -5.351, "y": 7.748, "z": -2.084, "atomElem": "C"},
+					{ "atomId": 23, "atomName": "H", "resName": "Leu", "resId": 2, "x": -6.821, "y": 4.923, "z": -2.394, "atomElem": "H"},
+					{ "atomId": 24, "atomName": "HA", "resName": "Leu", "resId": 2, "x": -4.750, "y": 3.494, "z": -3.403, "atomElem": "H"},
+					{ "atomId": 25, "atomName": "HB2", "resName": "Leu", "resId": 2, "x": -3.340, "y": 5.414, "z": -2.672, "atomElem": "H"},
+					{ "atomId": 26, "atomName": "HB3", "resName": "Leu", "resId": 2, "x": -4.813, "y": 5.817, "z": -3.564, "atomElem": "H"},
+					{ "atomId": 27, "atomName": "HG", "resName": "Leu", "resId": 2, "x": -5.568, "y": 6.022, "z": -0.858, "atomElem": "H"},
+					{ "atomId": 28, "atomName": "HD11", "resName": "Leu", "resId": 2, "x": -3.207, "y": 5.905, "z": -0.146, "atomElem": "H"},
+					{ "atomId": 29, "atomName": "HD12", "resName": "Leu", "resId": 2, "x": -2.841, "y": 7.304, "z": -1.183, "atomElem": "H"},
+					{ "atomId": 30, "atomName": "HD13", "resName": "Leu", "resId": 2, "x": -3.929, "y": 7.477, "z": 0.197, "atomElem": "H"},
+					{ "atomId": 31, "atomName": "HD21", "resName": "Leu", "resId": 2, "x": -4.607, "y": 8.209, "z": -2.736, "atomElem": "H"},
+					{ "atomId": 32, "atomName": "HD22", "resName": "Leu", "resId": 2, "x": -6.255, "y": 7.544, "z": -2.657, "atomElem": "H"},
+					{ "atomId": 33, "atomName": "HD23", "resName": "Leu", "resId": 2, "x": -5.592, "y": 8.445, "z": -1.281, "atomElem": "H"},
+					{ "atomId": 34, "atomName": "N", "resName": "Tyr", "resId": 3, "x": -4.354, "y": 3.455, "z": -0.111, "atomElem": "N"},
+					{ "atomId": 35, "atomName": "CA", "resName": "Tyr", "resId": 3, "x": -3.690, "y": 2.738, "z": 0.981, "atomElem": "C"},
+					{ "atomId": 36, "atomName": "C", "resName": "Tyr", "resId": 3, "x": -4.102, "y": 1.256, "z": 1.074, "atomElem": "C"},
+					{ "atomId": 37, "atomName": "O", "resName": "Tyr", "resId": 3, "x": -3.291, "y": 0.409, "z": 1.442, "atomElem": "O"},
+					{ "atomId": 38, "atomName": "CB", "resName": "Tyr", "resId": 3, "x": -3.964, "y": 3.472, "z": 2.302, "atomElem": "C"},
+					{ "atomId": 39, "atomName": "CG", "resName": "Tyr", "resId": 3, "x": -2.824, "y": 3.339, "z": 3.290, "atomElem": "C"},
+					{ "atomId": 40, "atomName": "CD1", "resName": "Tyr", "resId": 3, "x": -2.746, "y": 2.217, "z": 4.138, "atomElem": "C"},
+					{ "atomId": 41, "atomName": "CD2", "resName": "Tyr", "resId": 3, "x": -1.820, "y": 4.326, "z": 3.332, "atomElem": "C"},
+					{ "atomId": 42, "atomName": "CE1", "resName": "Tyr", "resId": 3, "x": -1.657, "y": 2.076, "z": 5.018, "atomElem": "C"},
+					{ "atomId": 43, "atomName": "CE2", "resName": "Tyr", "resId": 3, "x": -0.725, "y": 4.185, "z": 4.205, "atomElem": "C"},
+					{ "atomId": 44, "atomName": "CZ", "resName": "Tyr", "resId": 3, "x": -0.639, "y": 3.053, "z": 5.043, "atomElem": "C"},
+					{ "atomId": 45, "atomName": "OH", "resName": "Tyr", "resId": 3, "x": 0.433, "y": 2.881, "z": 5.861, "atomElem": "O"},
+					{ "atomId": 46, "atomName": "H", "resName": "Tyr", "resId": 3, "x": -4.934, "y": 4.245, "z": 0.120, "atomElem": "H"},
+					{ "atomId": 47, "atomName": "HA", "resName": "Tyr", "resId": 3, "x": -2.615, "y": 2.768, "z": 0.796, "atomElem": "H"},
+					{ "atomId": 48, "atomName": "HB2", "resName": "Tyr", "resId": 3, "x": -4.117, "y": 4.513, "z": 2.091, "atomElem": "H"},
+					{ "atomId": 49, "atomName": "HB3", "resName": "Tyr", "resId": 3, "x": -4.886, "y": 3.096, "z": 2.750, "atomElem": "H"},
+					{ "atomId": 50, "atomName": "HD1", "resName": "Tyr", "resId": 3, "x": -3.513, "y": 1.456, "z": 4.101, "atomElem": "H"},
+					{ "atomId": 51, "atomName": "HD2", "resName": "Tyr", "resId": 3, "x": -1.877, "y": 5.200, "z": 2.695, "atomElem": "H"},
+					{ "atomId": 52, "atomName": "HE1", "resName": "Tyr", "resId": 3, "x": -1.576, "y": 1.221, "z": 5.669, "atomElem": "H"},
+					{ "atomId": 53, "atomName": "HE2", "resName": "Tyr", "resId": 3, "x": 0.033, "y": 4.952, "z": 4.233, "atomElem": "H"},
+					{ "atomId": 54, "atomName": "HH", "resName": "Tyr", "resId": 3, "x": 1.187, "y": 3.395, "z": 5.567, "atomElem": "H"},
+					{ "atomId": 55, "atomName": "N", "resName": "Ile", "resId": 4, "x": -5.342, "y": 0.925, "z": 0.689, "atomElem": "N"},
+					{ "atomId": 56, "atomName": "CA", "resName": "Ile", "resId": 4, "x": -5.857, "y": -0.449, "z": 0.613, "atomElem": "C"},
+					{ "atomId": 57, "atomName": "C", "resName": "Ile", "resId": 4, "x": -5.089, "y": -1.221, "z": -0.470, "atomElem": "C"},
+					{ "atomId": 58, "atomName": "O", "resName": "Ile", "resId": 4, "x": -4.621, "y": -2.334, "z": -0.226, "atomElem": "O"},
+					{ "atomId": 59, "atomName": "CB", "resName": "Ile", "resId": 4, "x": -7.386, "y": -0.466, "z": 0.343, "atomElem": "C"},
+					{ "atomId": 60, "atomName": "CG1", "resName": "Ile", "resId": 4, "x": -8.197, "y": 0.540, "z": 1.197, "atomElem": "C"},
+					{ "atomId": 61, "atomName": "CG2", "resName": "Ile", "resId": 4, "x": -7.959, "y": -1.884, "z": 0.501, "atomElem": "C"},
+					{ "atomId": 62, "atomName": "CD1", "resName": "Ile", "resId": 4, "x": -8.019, "y": 0.412, "z": 2.715, "atomElem": "C"},
+					{ "atomId": 63, "atomName": "H", "resName": "Ile", "resId": 4, "x": -5.906, "y": 1.656, "z": 0.283, "atomElem": "H"},
+					{ "atomId": 64, "atomName": "HA", "resName": "Ile", "resId": 4, "x": -5.670, "y": -0.941, "z": 1.568, "atomElem": "H"},
+					{ "atomId": 65, "atomName": "HB", "resName": "Ile", "resId": 4, "x": -7.554, "y": -0.192, "z": -0.697, "atomElem": "H"},
+					{ "atomId": 66, "atomName": "HG12", "resName": "Ile", "resId": 4, "x": -7.900, "y": 1.531, "z": 0.912, "atomElem": "H"},
+					{ "atomId": 67, "atomName": "HG13", "resName": "Ile", "resId": 4, "x": -9.257, "y": 0.424, "z": 0.964, "atomElem": "H"},
+					{ "atomId": 68, "atomName": "HG21", "resName": "Ile", "resId": 4, "x": -7.509, "y": -2.555, "z": -0.232, "atomElem": "H"},
+					{ "atomId": 69, "atomName": "HG22", "resName": "Ile", "resId": 4, "x": -7.759, "y": -2.271, "z": 1.501, "atomElem": "H"},
+					{ "atomId": 70, "atomName": "HG23", "resName": "Ile", "resId": 4, "x": -9.036, "y": -1.871, "z": 0.332, "atomElem": "H"},
+					{ "atomId": 71, "atomName": "HD11", "resName": "Ile", "resId": 4, "x": -8.306, "y": -0.585, "z": 3.049, "atomElem": "H"},
+					{ "atomId": 72, "atomName": "HD12", "resName": "Ile", "resId": 4, "x": -6.983, "y": 0.606, "z": 2.995, "atomElem": "H"},
+					{ "atomId": 73, "atomName": "HD13", "resName": "Ile", "resId": 4, "x": -8.656, "y": 1.144, "z": 3.213, "atomElem": "H"},
+					{ "atomId": 74, "atomName": "N", "resName": "Gln", "resId": 5, "x": -4.907, "y": -0.601, "z": -1.645, "atomElem": "N"},
+					{ "atomId": 75, "atomName": "CA", "resName": "Gln", "resId": 5, "x": -4.122, "y": -1.167, "z": -2.743, "atomElem": "C"},
+					{ "atomId": 76, "atomName": "C", "resName": "Gln", "resId": 5, "x": -2.629, "y": -1.321, "z": -2.390, "atomElem": "C"},
+					{ "atomId": 77, "atomName": "O", "resName": "Gln", "resId": 5, "x": -1.986, "y": -2.240, "z": -2.884, "atomElem": "O"},
+					{ "atomId": 78, "atomName": "CB", "resName": "Gln", "resId": 5, "x": -4.292, "y": -0.313, "z": -4.013, "atomElem": "C"},
+					{ "atomId": 79, "atomName": "CG", "resName": "Gln", "resId": 5, "x": -4.244, "y": -1.171, "z": -5.290, "atomElem": "C"},
+					{ "atomId": 80, "atomName": "CD", "resName": "Gln", "resId": 5, "x": -5.576, "y": -1.860, "z": -5.585, "atomElem": "C"},
+					{ "atomId": 81, "atomName": "OE1", "resName": "Gln", "resId": 5, "x": -5.769, "y": -3.044, "z": -5.335, "atomElem": "O"},
+					{ "atomId": 82, "atomName": "NE2", "resName": "Gln", "resId": 5, "x": -6.532, "y": -1.146, "z": -6.152, "atomElem": "N"},
+					{ "atomId": 83, "atomName": "H", "resName": "Gln", "resId": 5, "x": -5.327, "y": 0.318, "z": -1.763, "atomElem": "H"},
+					{ "atomId": 84, "atomName": "HA", "resName": "Gln", "resId": 5, "x": -4.517, "y": -2.162, "z": -2.940, "atomElem": "H"},
+					{ "atomId": 85, "atomName": "HB2", "resName": "Gln", "resId": 5, "x": -5.238, "y": 0.191, "z": -3.969, "atomElem": "H"},
+					{ "atomId": 86, "atomName": "HB3", "resName": "Gln", "resId": 5, "x": -3.492, "y": 0.429, "z": -4.053, "atomElem": "H"},
+					{ "atomId": 87, "atomName": "HG2", "resName": "Gln", "resId": 5, "x": -3.993, "y": -0.539, "z": -6.120, "atomElem": "H"},
+					{ "atomId": 88, "atomName": "HG3", "resName": "Gln", "resId": 5, "x": -3.458, "y": -1.923, "z": -5.205, "atomElem": "H"},
+					{ "atomId": 89, "atomName": "HE21", "resName": "Gln", "resId": 5, "x": -6.389, "y": -0.184, "z": -6.408, "atomElem": "H"},
+					{ "atomId": 90, "atomName": "HE22", "resName": "Gln", "resId": 5, "x": -7.392, "y": -1.635, "z": -6.335, "atomElem": "H"},
+					{ "atomId": 91, "atomName": "N", "resName": "Trp", "resId": 6, "x": -2.074, "y": -0.459, "z": -1.528, "atomElem": "N"},
+					{ "atomId": 92, "atomName": "CA", "resName": "Trp", "resId": 6, "x": -0.716, "y": -0.631, "z": -0.993, "atomElem": "C"},
+					{ "atomId": 93, "atomName": "C", "resName": "Trp", "resId": 6, "x": -0.631, "y": -1.766, "z": 0.044, "atomElem": "C"},
+					{ "atomId": 94, "atomName": "O", "resName": "Trp", "resId": 6, "x": 0.295, "y": -2.579, "z": -0.004, "atomElem": "O"},
+					{ "atomId": 95, "atomName": "CB", "resName": "Trp", "resId": 6, "x": -0.221, "y": 0.703, "z": -0.417, "atomElem": "C"},
+					{ "atomId": 96, "atomName": "CG", "resName": "Trp", "resId": 6, "x": 1.148, "y": 0.652, "z": 0.194, "atomElem": "C"},
+					{ "atomId": 97, "atomName": "CD1", "resName": "Trp", "resId": 6, "x": 2.319, "y": 0.664, "z": -0.482, "atomElem": "C"},
+					{ "atomId": 98, "atomName": "CD2", "resName": "Trp", "resId": 6, "x": 1.508, "y": 0.564, "z": 1.606, "atomElem": "C"},
+					{ "atomId": 99, "atomName": "NE1", "resName": "Trp", "resId": 6, "x": 3.371, "y": 0.560, "z": 0.411, "atomElem": "N"},
+					{ "atomId": 100, "atomName": "CE2", "resName": "Trp", "resId": 6, "x": 2.928, "y": 0.515, "z": 1.710, "atomElem": "C"},
+					{ "atomId": 101, "atomName": "CE3", "resName": "Trp", "resId": 6, "x": 0.779, "y": 0.524, "z": 2.812, "atomElem": "C"},
+					{ "atomId": 102, "atomName": "CZ2", "resName": "Trp", "resId": 6, "x": 3.599, "y": 0.445, "z": 2.938, "atomElem": "C"},
+					{ "atomId": 103, "atomName": "CZ3", "resName": "Trp", "resId": 6, "x": 1.439, "y": 0.433, "z": 4.053, "atomElem": "C"},
+					{ "atomId": 104, "atomName": "CH2", "resName": "Trp", "resId": 6, "x": 2.842, "y": 0.407, "z": 4.120, "atomElem": "C"},
+					{ "atomId": 105, "atomName": "H", "resName": "Trp", "resId": 6, "x": -2.624, "y": 0.343, "z": -1.242, "atomElem": "H"},
+					{ "atomId": 106, "atomName": "HA", "resName": "Trp", "resId": 6, "x": -0.052, "y": -0.908, "z": -1.813, "atomElem": "H"},
+					{ "atomId": 107, "atomName": "HB2", "resName": "Trp", "resId": 6, "x": -0.206, "y": 1.425, "z": -1.211, "atomElem": "H"},
+					{ "atomId": 108, "atomName": "HB3", "resName": "Trp", "resId": 6, "x": -0.921, "y": 1.044, "z": 0.344, "atomElem": "H"},
+					{ "atomId": 109, "atomName": "HD1", "resName": "Trp", "resId": 6, "x": 2.412, "y": 0.733, "z": -1.558, "atomElem": "H"},
+					{ "atomId": 110, "atomName": "HE1", "resName": "Trp", "resId": 6, "x": 4.360, "y": 0.536, "z": 0.156, "atomElem": "H"},
+					{ "atomId": 111, "atomName": "HE3", "resName": "Trp", "resId": 6, "x": -0.299, "y": 0.571, "z": 2.773, "atomElem": "H"},
+					{ "atomId": 112, "atomName": "HZ2", "resName": "Trp", "resId": 6, "x": 4.679, "y": 0.418, "z": 2.961, "atomElem": "H"},
+					{ "atomId": 113, "atomName": "HZ3", "resName": "Trp", "resId": 6, "x": 0.862, "y": 0.400, "z": 4.966, "atomElem": "H"},
+					{ "atomId": 114, "atomName": "HH2", "resName": "Trp", "resId": 6, "x": 3.334, "y": 0.360, "z": 5.081, "atomElem": "H"},
+					{ "atomId": 115, "atomName": "N", "resName": "Leu", "resId": 7, "x": -1.600, "y": -1.860, "z": 0.967, "atomElem": "N"},
+					{ "atomId": 116, "atomName": "CA", "resName": "Leu", "resId": 7, "x": -1.641, "y": -2.932, "z": 1.963, "atomElem": "C"},
+					{ "atomId": 117, "atomName": "C", "resName": "Leu", "resId": 7, "x": -1.847, "y": -4.319, "z": 1.342, "atomElem": "C"},
+					{ "atomId": 118, "atomName": "O", "resName": "Leu", "resId": 7, "x": -1.144, "y": -5.248, "z": 1.742, "atomElem": "O"},
+					{ "atomId": 119, "atomName": "CB", "resName": "Leu", "resId": 7, "x": -2.710, "y": -2.645, "z": 3.033, "atomElem": "C"},
+					{ "atomId": 120, "atomName": "CG", "resName": "Leu", "resId": 7, "x": -2.301, "y": -1.579, "z": 4.069, "atomElem": "C"},
+					{ "atomId": 121, "atomName": "CD1", "resName": "Leu", "resId": 7, "x": -3.475, "y": -1.323, "z": 5.018, "atomElem": "C"},
+					{ "atomId": 122, "atomName": "CD2", "resName": "Leu", "resId": 7, "x": -1.093, "y": -2.007, "z": 4.914, "atomElem": "C"},
+					{ "atomId": 123, "atomName": "H", "resName": "Leu", "resId": 7, "x": -2.316, "y": -1.137, "z": 0.994, "atomElem": "H"},
+					{ "atomId": 124, "atomName": "HA", "resName": "Leu", "resId": 7, "x": -0.666, "y": -2.978, "z": 2.445, "atomElem": "H"},
+					{ "atomId": 125, "atomName": "HB2", "resName": "Leu", "resId": 7, "x": -3.600, "y": -2.308, "z": 2.537, "atomElem": "H"},
+					{ "atomId": 126, "atomName": "HB3", "resName": "Leu", "resId": 7, "x": -2.921, "y": -3.571, "z": 3.572, "atomElem": "H"},
+					{ "atomId": 127, "atomName": "HG", "resName": "Leu", "resId": 7, "x": -2.061, "y": -0.649, "z": 3.560, "atomElem": "H"},
+					{ "atomId": 128, "atomName": "HD11", "resName": "Leu", "resId": 7, "x": -4.343, "y": -0.992, "z": 4.449, "atomElem": "H"},
+					{ "atomId": 129, "atomName": "HD12", "resName": "Leu", "resId": 7, "x": -3.725, "y": -2.237, "z": 5.560, "atomElem": "H"},
+					{ "atomId": 130, "atomName": "HD13", "resName": "Leu", "resId": 7, "x": -3.211, "y": -0.549, "z": 5.739, "atomElem": "H"},
+					{ "atomId": 131, "atomName": "HD21", "resName": "Leu", "resId": 7, "x": -1.270, "y": -2.989, "z": 5.354, "atomElem": "H"},
+					{ "atomId": 132, "atomName": "HD22", "resName": "Leu", "resId": 7, "x": -0.195, "y": -2.045, "z": 4.300, "atomElem": "H"},
+					{ "atomId": 133, "atomName": "HD23", "resName": "Leu", "resId": 7, "x": -0.922, "y": -1.286, "z": 5.712, "atomElem": "H"},
+					{ "atomId": 134, "atomName": "N", "resName": "Lys", "resId": 8, "x": -2.753, "y": -4.481, "z": 0.360, "atomElem": "N"},
+					{ "atomId": 135, "atomName": "CA", "resName": "Lys", "resId": 8, "x": -3.024, "y": -5.791, "z": -0.269, "atomElem": "C"},
+					{ "atomId": 136, "atomName": "C", "resName": "Lys", "resId": 8, "x": -1.796, "y": -6.427, "z": -0.937, "atomElem": "C"},
+					{ "atomId": 137, "atomName": "O", "resName": "Lys", "resId": 8, "x": -1.719, "y": -7.648, "z": -1.030, "atomElem": "O"},
+					{ "atomId": 138, "atomName": "CB", "resName": "Lys", "resId": 8, "x": -4.224, "y": -5.697, "z": -1.232, "atomElem": "C"},
+					{ "atomId": 139, "atomName": "CG", "resName": "Lys", "resId": 8, "x": -3.930, "y": -5.009, "z": -2.577, "atomElem": "C"},
+					{ "atomId": 140, "atomName": "CD", "resName": "Lys", "resId": 8, "x": -3.682, "y": -5.986, "z": -3.736, "atomElem": "C"},
+					{ "atomId": 141, "atomName": "CE", "resName": "Lys", "resId": 8, "x": -3.494, "y": -5.199, "z": -5.039, "atomElem": "C"},
+					{ "atomId": 142, "atomName": "NZ", "resName": "Lys", "resId": 8, "x": -4.563, "y": -5.483, "z": -6.023, "atomElem": "N"},
+					{ "atomId": 143, "atomName": "H", "resName": "Lys", "resId": 8, "x": -3.321, "y": -3.675, "z": 0.097, "atomElem": "H"},
+					{ "atomId": 144, "atomName": "HA", "resName": "Lys", "resId": 8, "x": -3.309, "y": -6.478, "z": 0.529, "atomElem": "H"},
+					{ "atomId": 145, "atomName": "HB2", "resName": "Lys", "resId": 8, "x": -4.565, "y": -6.694, "z": -1.436, "atomElem": "H"},
+					{ "atomId": 146, "atomName": "HB3", "resName": "Lys", "resId": 8, "x": -5.019, "y": -5.143, "z": -0.731, "atomElem": "H"},
+					{ "atomId": 147, "atomName": "HG2", "resName": "Lys", "resId": 8, "x": -4.769, "y": -4.390, "z": -2.830, "atomElem": "H"},
+					{ "atomId": 148, "atomName": "HG3", "resName": "Lys", "resId": 8, "x": -3.062, "y": -4.368, "z": -2.469, "atomElem": "H"},
+					{ "atomId": 149, "atomName": "HD2", "resName": "Lys", "resId": 8, "x": -2.799, "y": -6.562, "z": -3.536, "atomElem": "H"},
+					{ "atomId": 150, "atomName": "HD3", "resName": "Lys", "resId": 8, "x": -4.524, "y": -6.674, "z": -3.818, "atomElem": "H"},
+					{ "atomId": 151, "atomName": "HE2", "resName": "Lys", "resId": 8, "x": -3.502, "y": -4.150, "z": -4.813, "atomElem": "H"},
+					{ "atomId": 152, "atomName": "HE3", "resName": "Lys", "resId": 8, "x": -2.511, "y": -5.439, "z": -5.457, "atomElem": "H"},
+					{ "atomId": 153, "atomName": "HZ1", "resName": "Lys", "resId": 8, "x": -4.621, "y": -6.474, "z": -6.211, "atomElem": "H"},
+					{ "atomId": 154, "atomName": "HZ2", "resName": "Lys", "resId": 8, "x": -5.442, "y": -5.124, "z": -5.657, "atomElem": "H"},
+					{ "atomId": 155, "atomName": "HZ3", "resName": "Lys", "resId": 8, "x": -4.382, "y": -4.983, "z": -6.881, "atomElem": "H"},
+					{ "atomId": 156, "atomName": "N", "resName": "Asp", "resId": 9, "x": -0.828, "y": -5.607, "z": -1.355, "atomElem": "N"},
+					{ "atomId": 157, "atomName": "CA", "resName": "Asp", "resId": 9, "x": 0.466, "y": -6.016, "z": -1.905, "atomElem": "C"},
+					{ "atomId": 158, "atomName": "C", "resName": "Asp", "resId": 9, "x": 1.481, "y": -6.464, "z": -0.832, "atomElem": "C"},
+					{ "atomId": 159, "atomName": "O", "resName": "Asp", "resId": 9, "x": 2.545, "y": -6.971, "z": -1.194, "atomElem": "O"},
+					{ "atomId": 160, "atomName": "CB", "resName": "Asp", "resId": 9, "x": 1.033, "y": -4.839, "z": -2.724, "atomElem": "C"},
+					{ "atomId": 161, "atomName": "CG", "resName": "Asp", "resId": 9, "x": 0.672, "y": -4.906, "z": -4.210, "atomElem": "C"},
+					{ "atomId": 162, "atomName": "OD1", "resName": "Asp", "resId": 9, "x": -0.532, "y": -5.051, "z": -4.522, "atomElem": "O"},
+					{ "atomId": 163, "atomName": "OD2", "resName": "Asp", "resId": 9, "x": 1.627, "y": -4.815, "z": -5.017, "atomElem": "O"},
+					{ "atomId": 164, "atomName": "H", "resName": "Asp", "resId": 9, "x": -1.010, "y": -4.616, "z": -1.291, "atomElem": "H"},
+					{ "atomId": 165, "atomName": "HA", "resName": "Asp", "resId": 9, "x": 0.319, "y": -6.867, "z": -2.574, "atomElem": "H"},
+					{ "atomId": 166, "atomName": "HB2", "resName": "Asp", "resId": 9, "x": 0.644, "y": -3.924, "z": -2.320, "atomElem": "H"},
+					{ "atomId": 167, "atomName": "HB3", "resName": "Asp", "resId": 9, "x": 2.116, "y": -4.837, "z": -2.650, "atomElem": "H"},
+					{ "atomId": 168, "atomName": "N", "resName": "Gly", "resId": 10, "x": 1.185, "y": -6.278, "z": 0.464, "atomElem": "N"},
+					{ "atomId": 169, "atomName": "CA", "resName": "Gly", "resId": 10, "x": 2.060, "y": -6.618, "z": 1.593, "atomElem": "C"},
+					{ "atomId": 170, "atomName": "C", "resName": "Gly", "resId": 10, "x": 2.628, "y": -5.412, "z": 2.353, "atomElem": "C"},
+					{ "atomId": 171, "atomName": "O", "resName": "Gly", "resId": 10, "x": 3.496, "y": -5.594, "z": 3.208, "atomElem": "O"},
+					{ "atomId": 172, "atomName": "H", "resName": "Gly", "resId": 10, "x": 0.265, "y": -5.908, "z": 0.693, "atomElem": "H"},
+					{ "atomId": 173, "atomName": "HA2", "resName": "Gly", "resId": 10, "x": 1.486, "y": -7.214, "z": 2.304, "atomElem": "H"},
+					{ "atomId": 174, "atomName": "HA3", "resName": "Gly", "resId": 10, "x": 2.897, "y": -7.228, "z": 1.252, "atomElem": "H"},
+					{ "atomId": 175, "atomName": "N", "resName": "Gly", "resId": 11, "x": 2.172, "y": -4.187, "z": 2.055, "atomElem": "N"},
+					{ "atomId": 176, "atomName": "CA", "resName": "Gly", "resId": 11, "x": 2.626, "y": -2.967, "z": 2.723, "atomElem": "C"},
+					{ "atomId": 177, "atomName": "C", "resName": "Gly", "resId": 11, "x": 4.157, "y": -2.802, "z": 2.654, "atomElem": "C"},
+					{ "atomId": 178, "atomName": "O", "resName": "Gly", "resId": 11, "x": 4.710, "y": -2.829, "z": 1.551, "atomElem": "O"},
+					{ "atomId": 179, "atomName": "H", "resName": "Gly", "resId": 11, "x": 1.481, "y": -4.089, "z": 1.319, "atomElem": "H"},
+					{ "atomId": 180, "atomName": "HA2", "resName": "Gly", "resId": 11, "x": 2.164, "y": -2.109, "z": 2.237, "atomElem": "H"},
+					{ "atomId": 181, "atomName": "HA3", "resName": "Gly", "resId": 11, "x": 2.280, "y": -2.997, "z": 3.753, "atomElem": "H"},
+					{ "atomId": 182, "atomName": "N", "resName": "Pro", "resId": 12, "x": 4.871, "y": -2.651, "z": 3.794, "atomElem": "N"},
+					{ "atomId": 183, "atomName": "CA", "resName": "Pro", "resId": 12, "x": 6.333, "y": -2.533, "z": 3.806, "atomElem": "C"},
+					{ "atomId": 184, "atomName": "C", "resName": "Pro", "resId": 12, "x": 7.058, "y": -3.729, "z": 3.165, "atomElem": "C"},
+					{ "atomId": 185, "atomName": "O", "resName": "Pro", "resId": 12, "x": 8.139, "y": -3.562, "z": 2.601, "atomElem": "O"},
+					{ "atomId": 186, "atomName": "CB", "resName": "Pro", "resId": 12, "x": 6.740, "y": -2.387, "z": 5.279, "atomElem": "C"},
+					{ "atomId": 187, "atomName": "CG", "resName": "Pro", "resId": 12, "x": 5.460, "y": -1.952, "z": 5.987, "atomElem": "C"},
+					{ "atomId": 188, "atomName": "CD", "resName": "Pro", "resId": 12, "x": 4.362, "y": -2.615, "z": 5.160, "atomElem": "C"},
+					{ "atomId": 189, "atomName": "HA", "resName": "Pro", "resId": 12, "x": 6.611, "y": -1.626, "z": 3.267, "atomElem": "H"},
+					{ "atomId": 190, "atomName": "HB2", "resName": "Pro", "resId": 12, "x": 7.091, "y": -3.323, "z": 5.670, "atomElem": "H"},
+					{ "atomId": 191, "atomName": "HB3", "resName": "Pro", "resId": 12, "x": 7.531, "y": -1.647, "z": 5.403, "atomElem": "H"},
+					{ "atomId": 192, "atomName": "HG2", "resName": "Pro", "resId": 12, "x": 5.443, "y": -2.302, "z": 7.001, "atomElem": "H"},
+					{ "atomId": 193, "atomName": "HG3", "resName": "Pro", "resId": 12, "x": 5.358, "y": -0.867, "z": 5.929, "atomElem": "H"},
+					{ "atomId": 194, "atomName": "HD2", "resName": "Pro", "resId": 12, "x": 4.173, "y": -3.609, "z": 5.516, "atomElem": "H"},
+					{ "atomId": 195, "atomName": "HD3", "resName": "Pro", "resId": 12, "x": 3.440, "y": -2.042, "z": 5.246, "atomElem": "H"},
+					{ "atomId": 196, "atomName": "N", "resName": "Ser", "resId": 13, "x": 6.463, "y": -4.929, "z": 3.205, "atomElem": "N"},
+					{ "atomId": 197, "atomName": "CA", "resName": "Ser", "resId": 13, "x": 7.049, "y": -6.179, "z": 2.704, "atomElem": "C"},
+					{ "atomId": 198, "atomName": "C", "resName": "Ser", "resId": 13, "x": 6.897, "y": -6.369, "z": 1.185, "atomElem": "C"},
+					{ "atomId": 199, "atomName": "O", "resName": "Ser", "resId": 13, "x": 7.025, "y": -7.488, "z": 0.697, "atomElem": "O"},
+					{ "atomId": 200, "atomName": "CB", "resName": "Ser", "resId": 13, "x": 6.458, "y": -7.371, "z": 3.472, "atomElem": "C"},
+					{ "atomId": 201, "atomName": "OG", "resName": "Ser", "resId": 13, "x": 6.763, "y": -7.264, "z": 4.850, "atomElem": "O"},
+					{ "atomId": 202, "atomName": "H", "resName": "Ser", "resId": 13, "x": 5.535, "y": -4.999, "z": 3.613, "atomElem": "H"},
+					{ "atomId": 203, "atomName": "HA", "resName": "Ser", "resId": 13, "x": 8.121, "y": -6.159, "z": 2.903, "atomElem": "H"},
+					{ "atomId": 204, "atomName": "HB2", "resName": "Ser", "resId": 13, "x": 5.393, "y": -7.382, "z": 3.344, "atomElem": "H"},
+					{ "atomId": 205, "atomName": "HB3", "resName": "Ser", "resId": 13, "x": 6.880, "y": -8.302, "z": 3.093, "atomElem": "H"},
+					{ "atomId": 206, "atomName": "HG", "resName": "Ser", "resId": 13, "x": 7.707, "y": -7.394, "z": 4.970, "atomElem": "H"},
+					{ "atomId": 207, "atomName": "N", "resName": "Ser", "resId": 14, "x": 6.637, "y": -5.290, "z": 0.434, "atomElem": "N"},
+					{ "atomId": 208, "atomName": "CA", "resName": "Ser", "resId": 14, "x": 6.389, "y": -5.315, "z": -1.015, "atomElem": "C"},
+					{ "atomId": 209, "atomName": "C", "resName": "Ser", "resId": 14, "x": 7.332, "y": -4.405, "z": -1.823, "atomElem": "C"},
+					{ "atomId": 210, "atomName": "O", "resName": "Ser", "resId": 14, "x": 7.082, "y": -4.123, "z": -2.993, "atomElem": "O"},
+					{ "atomId": 211, "atomName": "CB", "resName": "Ser", "resId": 14, "x": 4.914, "y": -4.993, "z": -1.265, "atomElem": "C"},
+					{ "atomId": 212, "atomName": "OG", "resName": "Ser", "resId": 14, "x": 4.431, "y": -5.743, "z": -2.358, "atomElem": "O"},
+					{ "atomId": 213, "atomName": "H", "resName": "Ser", "resId": 14, "x": 6.509, "y": -4.415, "z": 0.930, "atomElem": "H"},
+					{ "atomId": 214, "atomName": "HA", "resName": "Ser", "resId": 14, "x": 6.562, "y": -6.329, "z": -1.378, "atomElem": "H"},
+					{ "atomId": 215, "atomName": "HB2", "resName": "Ser", "resId": 14, "x": 4.344, "y": -5.236, "z": -0.389, "atomElem": "H"},
+					{ "atomId": 216, "atomName": "HB3", "resName": "Ser", "resId": 14, "x": 4.778, "y": -3.934, "z": -1.457, "atomElem": "H"},
+					{ "atomId": 217, "atomName": "HG", "resName": "Ser", "resId": 14, "x": 3.714, "y": -6.324, "z": -1.987, "atomElem": "H"},
+					{ "atomId": 218, "atomName": "N", "resName": "Gly", "resId": 15, "x": 8.419, "y": -3.920, "z": -1.202, "atomElem": "N"},
+					{ "atomId": 219, "atomName": "CA", "resName": "Gly", "resId": 15, "x": 9.451, "y": -3.116, "z": -1.870, "atomElem": "C"},
+					{ "atomId": 220, "atomName": "C", "resName": "Gly", "resId": 15, "x": 8.984, "y": -1.725, "z": -2.316, "atomElem": "C"},
+					{ "atomId": 221, "atomName": "O", "resName": "Gly", "resId": 15, "x": 9.539, "y": -1.177, "z": -3.267, "atomElem": "O"},
+					{ "atomId": 222, "atomName": "H", "resName": "Gly", "resId": 15, "x": 8.573, "y": -4.210, "z": -0.246, "atomElem": "H"},
+					{ "atomId": 223, "atomName": "HA2", "resName": "Gly", "resId": 15, "x": 10.297, "y": -2.987, "z": -1.194, "atomElem": "H"},
+					{ "atomId": 224, "atomName": "HA3", "resName": "Gly", "resId": 15, "x": 9.805, "y": -3.652, "z": -2.752, "atomElem": "H"},
+					{ "atomId": 225, "atomName": "N", "resName": "Arg", "resId": 16, "x": 7.956, "y": -1.164, "z": -1.660, "atomElem": "N"},
+					{ "atomId": 226, "atomName": "CA", "resName": "Arg", "resId": 16, "x": 7.289, "y": 0.084, "z": -2.054, "atomElem": "C"},
+					{ "atomId": 227, "atomName": "C", "resName": "Arg", "resId": 16, "x": 6.855, "y": 0.916, "z": -0.829, "atomElem": "C"},
+					{ "atomId": 228, "atomName": "O", "resName": "Arg", "resId": 16, "x": 6.222, "y": 0.366, "z": 0.076, "atomElem": "O"},
+					{ "atomId": 229, "atomName": "CB", "resName": "Arg", "resId": 16, "x": 6.110, "y": -0.243, "z": -2.994, "atomElem": "C"},
+					{ "atomId": 230, "atomName": "CG", "resName": "Arg", "resId": 16, "x": 5.046, "y": -1.171, "z": -2.378, "atomElem": "C"},
+					{ "atomId": 231, "atomName": "CD", "resName": "Arg", "resId": 16, "x": 3.923, "y": -1.592, "z": -3.338, "atomElem": "C"},
+					{ "atomId": 232, "atomName": "NE", "resName": "Arg", "resId": 16, "x": 4.251, "y": -2.811, "z": -4.100, "atomElem": "N"},
+					{ "atomId": 233, "atomName": "CZ", "resName": "Arg", "resId": 16, "x": 4.859, "y": -2.914, "z": -5.274, "atomElem": "C"},
+					{ "atomId": 234, "atomName": "NH1", "resName": "Arg", "resId": 16, "x": 5.289, "y": -1.864, "z": -5.937, "atomElem": "N"},
+					{ "atomId": 235, "atomName": "NH2", "resName": "Arg", "resId": 16, "x": 5.035, "y": -4.095, "z": -5.809, "atomElem": "N"},
+					{ "atomId": 236, "atomName": "H", "resName": "Arg", "resId": 16, "x": 7.579, "y": -1.676, "z": -0.874, "atomElem": "H"},
+					{ "atomId": 237, "atomName": "HA", "resName": "Arg", "resId": 16, "x": 8.009, "y": 0.663, "z": -2.630, "atomElem": "H"},
+					{ "atomId": 238, "atomName": "HB2", "resName": "Arg", "resId": 16, "x": 5.634, "y": 0.678, "z": -3.269, "atomElem": "H"},
+					{ "atomId": 239, "atomName": "HB3", "resName": "Arg", "resId": 16, "x": 6.524, "y": -0.720, "z": -3.880, "atomElem": "H"},
+					{ "atomId": 240, "atomName": "HG2", "resName": "Arg", "resId": 16, "x": 5.538, "y": -2.059, "z": -2.031, "atomElem": "H"},
+					{ "atomId": 241, "atomName": "HG3", "resName": "Arg", "resId": 16, "x": 4.579, "y": -0.652, "z": -1.549, "atomElem": "H"},
+					{ "atomId": 242, "atomName": "HD2", "resName": "Arg", "resId": 16, "x": 3.033, "y": -1.774, "z": -2.766, "atomElem": "H"},
+					{ "atomId": 243, "atomName": "HD3", "resName": "Arg", "resId": 16, "x": 3.669, "y": -0.765, "z": -4.003, "atomElem": "H"},
+					{ "atomId": 244, "atomName": "HE", "resName": "Arg", "resId": 16, "x": 3.963, "y": -3.694, "z": -3.698, "atomElem": "H"},
+					{ "atomId": 245, "atomName": "HH11", "resName": "Arg", "resId": 16, "x": 5.150, "y": -0.962, "z": -5.521, "atomElem": "H"},
+					{ "atomId": 246, "atomName": "HH12", "resName": "Arg", "resId": 16, "x": 5.761, "y": -1.962, "z": -6.815, "atomElem": "H"},
+					{ "atomId": 247, "atomName": "HH21", "resName": "Arg", "resId": 16, "x": 4.649, "y": -4.894, "z": -5.327, "atomElem": "H"},
+					{ "atomId": 248, "atomName": "HH22", "resName": "Arg", "resId": 16, "x": 5.508, "y": -4.205, "z": -6.684, "atomElem": "H"},
+					{ "atomId": 249, "atomName": "N", "resName": "Pro", "resId": 17, "x": 7.156, "y": 2.230, "z": -0.780, "atomElem": "N"},
+					{ "atomId": 250, "atomName": "CA", "resName": "Pro", "resId": 17, "x": 6.782, "y": 3.088, "z": 0.345, "atomElem": "C"},
+					{ "atomId": 251, "atomName": "C", "resName": "Pro", "resId": 17, "x": 5.261, "y": 3.331, "z": 0.395, "atomElem": "C"},
+					{ "atomId": 252, "atomName": "O", "resName": "Pro", "resId": 17, "x": 4.586, "y": 3.165, "z": -0.624, "atomElem": "O"},
+					{ "atomId": 253, "atomName": "CB", "resName": "Pro", "resId": 17, "x": 7.554, "y": 4.394, "z": 0.119, "atomElem": "C"},
+					{ "atomId": 254, "atomName": "CG", "resName": "Pro", "resId": 17, "x": 7.677, "y": 4.474, "z": -1.401, "atomElem": "C"},
+					{ "atomId": 255, "atomName": "CD", "resName": "Pro", "resId": 17, "x": 7.820, "y": 3.010, "z": -1.816, "atomElem": "C"},
+					{ "atomId": 256, "atomName": "HA", "resName": "Pro", "resId": 17, "x": 7.107, "y": 2.628, "z": 1.279, "atomElem": "H"},
+					{ "atomId": 257, "atomName": "HB2", "resName": "Pro", "resId": 17, "x": 7.009, "y": 5.234, "z": 0.505, "atomElem": "H"},
+					{ "atomId": 258, "atomName": "HB3", "resName": "Pro", "resId": 17, "x": 8.548, "y": 4.308, "z": 0.561, "atomElem": "H"},
+					{ "atomId": 259, "atomName": "HG2", "resName": "Pro", "resId": 17, "x": 6.800, "y": 4.914, "z": -1.836, "atomElem": "H"},
+					{ "atomId": 260, "atomName": "HG3", "resName": "Pro", "resId": 17, "x": 8.540, "y": 5.066, "z": -1.707, "atomElem": "H"},
+					{ "atomId": 261, "atomName": "HD2", "resName": "Pro", "resId": 17, "x": 7.349, "y": 2.844, "z": -2.766, "atomElem": "H"},
+					{ "atomId": 262, "atomName": "HD3", "resName": "Pro", "resId": 17, "x": 8.876, "y": 2.739, "z": -1.855, "atomElem": "H"},
+					{ "atomId": 263, "atomName": "N", "resName": "Pro", "resId": 18, "x": 4.710, "y": 3.739, "z": 1.555, "atomElem": "N"},
+					{ "atomId": 264, "atomName": "CA", "resName": "Pro", "resId": 18, "x": 3.287, "y": 4.031, "z": 1.686, "atomElem": "C"},
+					{ "atomId": 265, "atomName": "C", "resName": "Pro", "resId": 18, "x": 2.901, "y": 5.305, "z": 0.913, "atomElem": "C"},
+					{ "atomId": 266, "atomName": "O", "resName": "Pro", "resId": 18, "x": 3.684, "y": 6.256, "z": 0.871, "atomElem": "O"},
+					{ "atomId": 267, "atomName": "CB", "resName": "Pro", "resId": 18, "x": 3.035, "y": 4.190, "z": 3.187, "atomElem": "C"},
+					{ "atomId": 268, "atomName": "CG", "resName": "Pro", "resId": 18, "x": 4.385, "y": 4.655, "z": 3.729, "atomElem": "C"},
+					{ "atomId": 269, "atomName": "CD", "resName": "Pro", "resId": 18, "x": 5.393, "y": 3.949, "z": 2.823, "atomElem": "C"},
+					{ "atomId": 270, "atomName": "HA", "resName": "Pro", "resId": 18, "x": 2.719, "y": 3.181, "z": 1.316, "atomElem": "H"},
+					{ "atomId": 271, "atomName": "HB2", "resName": "Pro", "resId": 18, "x": 2.274, "y": 4.924, "z": 3.372, "atomElem": "H"},
+					{ "atomId": 272, "atomName": "HB3", "resName": "Pro", "resId": 18, "x": 2.781, "y": 3.223, "z": 3.618, "atomElem": "H"},
+					{ "atomId": 273, "atomName": "HG2", "resName": "Pro", "resId": 18, "x": 4.482, "y": 5.721, "z": 3.654, "atomElem": "H"},
+					{ "atomId": 274, "atomName": "HG3", "resName": "Pro", "resId": 18, "x": 4.518, "y": 4.377, "z": 4.775, "atomElem": "H"},
+					{ "atomId": 275, "atomName": "HD2", "resName": "Pro", "resId": 18, "x": 6.262, "y": 4.562, "z": 2.682, "atomElem": "H"},
+					{ "atomId": 276, "atomName": "HD3", "resName": "Pro", "resId": 18, "x": 5.662, "y": 2.983, "z": 3.253, "atomElem": "H"},
+					{ "atomId": 277, "atomName": "N", "resName": "Pro", "resId": 19, "x": 1.688, "y": 5.360, "z": 0.336, "atomElem": "N"},
+					{ "atomId": 278, "atomName": "CA", "resName": "Pro", "resId": 19, "x": 1.185, "y": 6.543, "z": -0.353, "atomElem": "C"},
+					{ "atomId": 279, "atomName": "C", "resName": "Pro", "resId": 19, "x": 0.715, "y": 7.607, "z": 0.655, "atomElem": "C"},
+					{ "atomId": 280, "atomName": "O", "resName": "Pro", "resId": 19, "x": -0.124, "y": 7.324, "z": 1.513, "atomElem": "O"},
+					{ "atomId": 281, "atomName": "CB", "resName": "Pro", "resId": 19, "x": 0.048, "y": 6.014, "z": -1.229, "atomElem": "C"},
+					{ "atomId": 282, "atomName": "CG", "resName": "Pro", "resId": 19, "x": -0.519, "y": 4.852, "z": -0.412, "atomElem": "C"},
+					{ "atomId": 283, "atomName": "CD", "resName": "Pro", "resId": 19, "x": 0.716, "y": 4.275, "z": 0.272, "atomElem": "C"},
+					{ "atomId": 284, "atomName": "HA", "resName": "Pro", "resId": 19, "x": 1.961, "y": 6.966, "z": -0.991, "atomElem": "H"},
+					{ "atomId": 285, "atomName": "HB2", "resName": "Pro", "resId": 19, "x": -0.697, "y": 6.770, "z": -1.389, "atomElem": "H"},
+					{ "atomId": 286, "atomName": "HB3", "resName": "Pro", "resId": 19, "x": 0.463, "y": 5.630, "z": -2.162, "atomElem": "H"},
+					{ "atomId": 287, "atomName": "HG2", "resName": "Pro", "resId": 19, "x": -1.232, "y": 5.201, "z": 0.310, "atomElem": "H"},
+					{ "atomId": 288, "atomName": "HG3", "resName": "Pro", "resId": 19, "x": -1.019, "y": 4.114, "z": -1.041, "atomElem": "H"},
+					{ "atomId": 289, "atomName": "HD2", "resName": "Pro", "resId": 19, "x": 0.470, "y": 3.937, "z": 1.260, "atomElem": "H"},
+					{ "atomId": 290, "atomName": "HD3", "resName": "Pro", "resId": 19, "x": 1.121, "y": 3.461, "z": -0.329, "atomElem": "H"},
+					{ "atomId": 291, "atomName": "N", "resName": "Ser", "resId": 20, "x": 1.271, "y": 8.822, "z": 0.549, "atomElem": "N"},
+					{ "atomId": 292, "atomName": "CA", "resName": "Ser", "resId": 20, "x": 0.852, "y": 10.027, "z": 1.285, "atomElem": "C"},
+					{ "atomId": 293, "atomName": "C", "resName": "Ser", "resId": 20, "x": -0.406, "y": 10.657, "z": 0.683, "atomElem": "C"},
+					{ "atomId": 294, "atomName": "O", "resName": "Ser", "resId": 20, "x": -0.387, "y": 10.916, "z": -0.540, "atomElem": "O"},
+					{ "atomId": 295, "atomName": "CB", "resName": "Ser", "resId": 20, "x": 1.972, "y": 11.071, "z": 1.284, "atomElem": "C"},
+					{ "atomId": 296, "atomName": "OG", "resName": "Ser", "resId": 20, "x": 3.120, "y": 10.541, "z": 1.911, "atomElem": "O"},
+					{ "atomId": 297, "atomName": "H", "resName": "Ser", "resId": 20, "x": 1.969, "y": 8.961, "z": -0.165, "atomElem": "H"},
+					{ "atomId": 298, "atomName": "HA", "resName": "Ser", "resId": 20, "x": 0.601, "y": 9.760, "z": 2.310, "atomElem": "H"},
+					{ "atomId": 299, "atomName": "HB2", "resName": "Ser", "resId": 20, "x": 2.210, "y": 11.338, "z": 0.272, "atomElem": "H"},
+					{ "atomId": 300, "atomName": "HB3", "resName": "Ser", "resId": 20, "x": 1.636, "y": 11.959, "z": 1.824, "atomElem": "H"}
+				];
+				numPdbAtoms = 300;
+				minCoords = [-12.757, -8.302, -6.881];
+				maxCoords = [10.297, 11.959, 7.001];
+				startThreeJS();
+			}
+		</script>
+</head>
+
+<body>
+	<div id="dropzone" ondrop="dropHandler(event);" ondragenter="dragEnterHandler(event);" ondragover="dragOverHandler(event);">
+		<label for="fileUpload">
+			Drag and drop a PDB file here<br/>
+			or click this box to browse for it<br/>
+			or select one of the examples bellow.<br/>
+		</label>
+		<input type="file" id="fileUpload" style="visibility:hidden;" onchange="loadLocalFile(this.files);">
+		<br/>
+		<button type="button" onclick="loadBasicExample();">Basic</button>
+		<button type="button" onclick="loadExample();">Small</button>
+
+		<!--
+		// TODO: Enable when running from web server
+		<button type="button" onclick="loadRemoteFile('PDBs/1L2Y.pdb');">Small</button>
+		<button type="button" onclick="loadRemoteFile('PDBs/1AON.pdb');">Large</button>
+		-->
+
+	</div>
+	<div id="info">Description</div>
+	<script>
+		/* Auto-start example */
+		//loadBasicExample();
+		//loadExample();
+	</script>
+</body>
+
+</html>
