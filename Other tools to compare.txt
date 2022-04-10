@@ -1,0 +1,11 @@
+Web3DMol
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5570197/
+
+Molecular Dynamics softwares and formats:
+LAMMPS
+GROMACS
+NAMD
+
+Effects to check:
+https://www.xvivo.net/
+http://biovisions.mcb.harvard.edu/

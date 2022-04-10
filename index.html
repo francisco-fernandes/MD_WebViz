@@ -16,6 +16,7 @@
 	<script src='js/dat.gui.min.js'></script>
 	<!-- <script src="data.js"></script> -->
 	<script>
+		var elements = "HCNOS";
 		var elementProperties = {
 			"H": {name: "Hydrogen", radius: 1.20, color: 0xffffff },
 			"C": {name: "Carbon"  , radius: 1.70, color: 0x444444 },
@@ -37,61 +38,9 @@
 	</script>
 	<!-- <script src="code.js"></script> -->
 
-	<script id="vertexShader" type="x-shader/x-vertex">
-		precision mediump float;
-
-		/*
-		// List of all uniforms and attributes predefined by THREE.js:
-		uniform mat4 modelMatrix;
-		uniform mat4 modelViewMatrix;
-		uniform mat4 projectionMatrix;
-		uniform mat4 viewMatrix;
-		uniform mat3 normalMatrix;
-		uniform vec3 cameraPosition;
-		attribute vec3 position;
-		attribute vec3 normal;
-		attribute vec2 uv;
-		attribute vec3 color;
-		*/
-
-		attribute vec3 position;
-		attribute vec3 normal;
-		//attribute vec2 uv;
-		
-		uniform mat4 viewMatrix;
-		uniform mat4 modelViewMatrix;
-		uniform mat4 projectionMatrix;
-		
-		varying vec3 vNormal;
-		//varying vec3 vPos;
-		//varying vec2 vUv;
-
-		void main()	{
-			vNormal = (viewMatrix * vec4( normal, 1.0 )).xyz;
-			gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-			//out float gl_PointSize;
-		}
-	</script>
-
-	<script id="fragmentShader" type="x-shader/x-fragment">
-		precision mediump float;
-
-		//uniform mat4 viewMatrix;
-		//uniform vec3 cameraPosition;
-
-		varying vec3 vNormal;
-
-		void main()	{
-			//in vec2 gl_PointCoord;
-			//float depth = (2.0 * gl_FragCoord.z - gl_DepthRange.near - gl_DepthRange.far) / (gl_DepthRange.far - gl_DepthRange.near);
-			//float depth = 1.0 - smoothstep( gl_DepthRange.near , gl_DepthRange.far , gl_FragCoord.z / gl_FragCoord.w );
-			float depth = 1.0 - (gl_FragCoord.z - gl_DepthRange.near) / (gl_DepthRange.far - gl_DepthRange.near);
-			depth = depth / gl_FragCoord.w;
-			gl_FragColor = vec4(vec3(depth), 1.0);
-		}
-	</script>
 
 	<script id="pointVertexShader" type="x-shader/x-vertex">
+		//#version 300 es // already set by 'material.glslVersion'
 		precision mediump float;
 
 		uniform mat4 modelViewMatrix;
@@ -99,16 +48,16 @@
 		//uniform vec3 cameraPosition;
 		uniform float sizeMult;
 		
-		//attribute vec3 normal;
-		//attribute vec2 uv;
+		//in vec3 normal;
+		//in vec2 uv;
 
-		attribute vec3 position;
-		attribute vec3 color;
-		attribute float size;
+		in vec3 position;
+		in vec3 color;
+		in float size;
 
-		//varying vec3 vPosition;
-		varying vec4 vColor;
-		varying float normDepth;
+		//out vec3 vPosition;
+		out vec4 vColor;
+		out float normDepth;
 		
 		void main() {
 			//vPosition = position;
@@ -126,24 +75,28 @@
 	</script>
 
 	<script id="pointFragmentShader" type="x-shader/x-fragment">
+		//#version 300 es // already set by 'material.glslVersion'
 		precision mediump float;
 
 		//uniform float time;
-		uniform sampler2D texture;
+		uniform sampler2D pointTexture;
 		//uniform vec3 cameraPosition;
 		
-		//varying vec3 vPosition;
-		varying vec4 vColor;
-		varying float normDepth;
+		//in vec3 vPosition;
+		in vec4 vColor;
+		in float normDepth;
+		out vec4 glFragColor;
 
 		void main() {
-			gl_FragColor = vColor * texture2D( texture, gl_PointCoord );
-			if( length(gl_FragColor.xyz) < 0.01) discard;
-			//gl_FragColor = vec4( vec3( normDepth ), 1.0 );
+			//glFragColor = vColor * texture2D( pointTexture, gl_PointCoord ); // remove the '2D' suffix in WebGL2
+			glFragColor = vColor * texture( pointTexture, gl_PointCoord );
+			if( length(glFragColor.xyz) < 0.01) discard;
+			//glFragColor = vec4( vec3( normDepth ), 1.0 );
 		}
 	</script>
 	
 	<script id="debugVS" type="x-shader/x-vertex">
+		//#version 300 es
 		precision highp float;
 		uniform mat4 modelViewMatrix;
 		uniform mat4 projectionMatrix;
@@ -161,22 +114,23 @@
 		uniform vec3 cameraRight;
 		uniform vec3 cameraUp;
 		uniform float sizeMult;
-		attribute vec3 position;
-		attribute float id;
-		varying float vId;
-		varying float vDepth;
-		varying vec3 vPos;
-		varying vec3 vMvPos;
-		varying vec3 cameraPos;
-		varying vec4 vPosColor;
-		varying vec4 vIdColor;
-		varying vec4 vTestColor;
-		varying float vSphereDepthChange;
-		varying vec3 rightVector;
-		varying vec3 upVector;
-		varying vec3 backVector;
-		varying float pointSize;
-		//varying vec4 vVertexIdColor;
+		in vec3 position;
+		in float id;
+		out float vId;
+		out float vDepth;
+		out vec3 vPos;
+		out vec3 vMvPos;
+		out vec3 cameraPos;
+		out vec4 vPosColor;
+		out vec4 vIdColor;
+		out vec4 vTestColor;
+		out float vSphereDepthChange;
+		out vec3 rightVector;
+		out vec3 upVector;
+		out vec3 backVector;
+		out float pointSize;
+		out vec4 vVertexIdFloat;
+		out vec4 vVertexIdColor;
 		
 		/*
 		// NOTE: neither structs nor arrays of structs can be used as 'varying's
@@ -189,11 +143,11 @@
 		varying nearAtom nearAtoms;
 		*/
 		
-		varying float nearAtomsIds[6];
-		varying float nearAtomsTypes[6];
-		varying vec3 nearAtomsCoords[6];
-		//varying float nearAtomsDists[6];
-		varying vec4 nearAtomsColors[6];
+		out float nearAtomsIds[6];
+		out float nearAtomsTypes[6];
+		out vec3 nearAtomsCoords[6];
+		//out float nearAtomsDists[6];
+		out vec4 nearAtomsColors[6];
 		
 		uniform sampler2D tAtomsCoords;
 		uniform sampler2D tNearAtoms;
@@ -232,6 +186,7 @@
 			return color;
 		}
 
+		// TODO: Try direct texel fetch in shader: vec4 values = texelFetch(sampler, ivec2Position, lod);
 		// TODO: when using real atom's radius, replace "nearAtomsColors[i].a" by correct value
 		void getNearAtoms(){
 			vec2 tex2Coord, tex1Coord;
@@ -249,7 +204,7 @@
 			tex2Coord *= tex2InvDim; // to convert to the range [0.0,1.0]
 
 			/* Get the 1st texel (ids of atoms #1, #2, #3) */
-			tex2Texel = texture2D( tNearAtoms, tex2Coord );
+			tex2Texel = texture( tNearAtoms, tex2Coord );
 			
 			/* Get coordinates of near atom #1 */
 			nearAtomId = (tex2Texel.x + 0.5);
@@ -257,7 +212,7 @@
 			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
 			tex1Coord.y += 0.5; // +0.5 to fall in the middle of the texel
 			tex1Coord *= tex1InvDim; // to convert to the range [0.0,1.0]
-			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomCoords = texture( tAtomsCoords, tex1Coord );
 			nearAtomsCoords[0] = nearAtomCoords.xyz;
 			nearAtomsTypes[0] = nearAtomCoords.w;
 			//nearAtomDist = distance( position, nearAtomCoords.xyz ); // get distance between this point and the center of the near atom
@@ -271,7 +226,7 @@
 			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
 			tex1Coord.y += 0.5;
 			tex1Coord *= tex1InvDim;
-			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomCoords = texture( tAtomsCoords, tex1Coord );
 			nearAtomsCoords[1] = nearAtomCoords.xyz;
 			nearAtomsTypes[1] = nearAtomCoords.w;
 			//nearAtomDist = distance( position, nearAtomCoords.xyz );
@@ -285,7 +240,7 @@
 			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
 			tex1Coord.y += 0.5;
 			tex1Coord *= tex1InvDim;
-			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomCoords = texture( tAtomsCoords, tex1Coord );
 			nearAtomsCoords[2] = nearAtomCoords.xyz;
 			nearAtomsTypes[2] = nearAtomCoords.w;
 			//nearAtomDist = distance( position, nearAtomCoords.xyz );
@@ -295,7 +250,7 @@
 
 			/* Get the 2nd texel (ids of atoms #4, #5, #6) */
 			tex2Coord.x += tex2InvDim;
-			tex2Texel = texture2D( tNearAtoms, tex2Coord );
+			tex2Texel = texture( tNearAtoms, tex2Coord );
 
 			/* Get coordinates of near atom #4 */
 			nearAtomId = (tex2Texel.x + 0.5);
@@ -303,7 +258,7 @@
 			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
 			tex1Coord.y += 0.5;
 			tex1Coord *= tex1InvDim;
-			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomCoords = texture( tAtomsCoords, tex1Coord );
 			nearAtomsCoords[3] = nearAtomCoords.xyz;
 			nearAtomsTypes[3] = nearAtomCoords.w;
 			//nearAtomDist = distance( position, nearAtomCoords.xyz );
@@ -317,7 +272,7 @@
 			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
 			tex1Coord.y += 0.5;
 			tex1Coord *= tex1InvDim;
-			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomCoords = texture( tAtomsCoords, tex1Coord );
 			nearAtomsCoords[4] = nearAtomCoords.xyz;
 			nearAtomsTypes[4] = nearAtomCoords.w;
 			//nearAtomDist = distance( position, nearAtomCoords.xyz );
@@ -331,7 +286,7 @@
 			tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
 			tex1Coord.y += 0.5;
 			tex1Coord *= tex1InvDim;
-			nearAtomCoords = texture2D( tAtomsCoords, tex1Coord );
+			nearAtomCoords = texture( tAtomsCoords, tex1Coord );
 			nearAtomsCoords[5] = nearAtomCoords.xyz;
 			nearAtomsTypes[5] = nearAtomCoords.w;
 			//nearAtomDist = distance( position, nearAtomCoords.xyz );
@@ -409,50 +364,64 @@
 			gl_PointSize = heightInPixels;
 			*/
 
-			//vVertexIdColor = idToColor(gl_VertexID);
+			vVertexIdFloat = floatToColor( float(gl_VertexID) ); // 'gl_VertexID' starts at 0 for the 1st atom
+			vVertexIdColor = idToColor( float(gl_VertexID) , numAtoms );
 
 		}
 	</script>
 	<script id="debugVertexIdFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
-		varying vec4 vVertexIdColor;
+		in vec4 vVertexIdFloat;
+		in vec4 vVertexIdColor;
+		out vec4 glFragColor;
 		void main() {
-			gl_FragColor = vVertexIdColor;
+			/* gl_PointCoord : top left = (0,0) ; bottom right = (1,1) */
+			vec2 dist = abs( gl_PointCoord - vec2(0.5) );
+			if( max( dist.x , dist.y ) < 0.25 ){ // draw center with float value
+				glFragColor = vVertexIdFloat; // The 1st atom has 'gl_VertexID' of 0
+				return;
+			}
+			glFragColor = vVertexIdColor;
 		}
 	</script>
 	<script id="debugDataTexturesFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform sampler2D tAtomsCoords;
 		uniform sampler2D tNearAtoms;
 		// Now declared as 'define's:
 		//uniform float tex1Dim;
 		//uniform float tex2Dim;
-		varying float vId;
+		in float vId;
+		out vec4 glFragColor;
 		void main() {
-			vec2 dist = abs( gl_PointCoord - vec2(0.5) );
+			vec2 dist = abs( gl_PointCoord - vec2(0.5) ); // 'gl_PointCoord' from (0,0) to (1,1)
 			if( max( dist.x , dist.y ) > 0.49 ){ // draw white border
-				gl_FragColor = vec4(1.0);
+				glFragColor = vec4(1.0);
 				return;
 			}
-			if( mod( vId , 2.0) < 0.5 ) gl_FragColor = texture2D( tAtomsCoords , gl_PointCoord );
-			else gl_FragColor = texture2D( tNearAtoms , gl_PointCoord );
-			gl_FragColor.a = 1.0;
+			if( mod( vId , 2.0) < 0.5 ) glFragColor = texture( tAtomsCoords , gl_PointCoord ); // texture coordinates from (0,0) to (1,1)
+			else glFragColor = texture( tNearAtoms , gl_PointCoord );
+			glFragColor.a = 1.0;
 		}
 	</script>
 	<script id="debugLongRangeOcclusionFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		// 'coords*' variables stored as 'define's
 		//uniform vec3 coordsCenter;
 		//uniform vec3 coordsRange;
-		varying vec4 vIdColor;
-		varying vec3 vPos;
-		varying vec3 backVector;
+		in vec4 vIdColor;
+		in vec3 vPos;
+		in vec3 backVector;
+		out vec4 glFragColor;
 		void main() {
 			vec2 posVector = gl_PointCoord * 2.0 - 1.0;
 			float distToCenter = length( posVector );
 			if(distToCenter > 1.0) discard;
-			gl_FragColor = vIdColor;
-			if(distToCenter > 0.9) gl_FragColor.xyz = vec3(1.0);
+			glFragColor = vIdColor;
+			if(distToCenter > 0.9) glFragColor.xyz = vec3(1.0);
 
 			// TODO: use 'coordsHalfInvRange' instead of 'coordsRange'
 			// occlusion = ( abs( point - center) / (range/2) ) * abs( camera - point )
@@ -462,18 +431,20 @@
 			//float occlusion = min( occlusionPerDir.x , min( occlusionPerDir.y , occlusionPerDir.z ) );
 			//float occlusion = length(occlusionPerDir);
 			float occlusion = min( dot(occlusionPerDir,occlusionPerDir) , 1.0);
-			gl_FragColor.xyz *= occlusion;
+			glFragColor.xyz *= occlusion;
 			
 		}
 	</script>
 	<script id="debugEllipsesFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform mat4 modelViewMatrix;
 		uniform vec3 cameraFront;
 		uniform vec3 cameraRight;
 		uniform vec3 cameraUp;
 		uniform vec3 cameraPosition;
-		varying vec3 cameraPos;
+		in vec3 cameraPos;
+		out vec4 glFragColor;
 		vec4 floatToColor(in float x){
 			vec4 color = vec4(abs(x));
 			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
@@ -503,29 +474,32 @@
 
 			vec3 dotProds = vec3( dot(cameraRight,camRight) , dot(cameraUp,camUp) , dot(-cameraFront,camBack) );
 			vec3 crossProds = vec3( length(cross(cameraRight,camRight)) , length(cross(cameraUp,camUp)) , length(cross(-cameraFront,camBack)) );
-			gl_FragColor = vec3x2ToColor( dotProds , crossProds );
+			glFragColor = vec3x2ToColor( dotProds , crossProds );
 		}
 	</script>
 	<script id="debugOcclusionFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform float sizeMult;
 		uniform vec3 cameraPosition;
-		varying vec3 rightVector;
-		varying vec3 upVector;
-		varying vec3 backVector;
-		varying vec3 cameraPos;
-		varying vec3 vPos;
-		varying vec4 vIdColor;
+		in vec3 rightVector;
+		in vec3 upVector;
+		in vec3 backVector;
+		in vec3 cameraPos;
+		in vec3 vPos;
+		in vec4 vIdColor;
 		
-		varying vec3 nearAtomsCoords[6];
-		varying vec4 nearAtomsColors[6];
+		in vec3 nearAtomsCoords[6];
+		in vec4 nearAtomsColors[6];
 		vec3 pointPos;
+
+		out vec4 glFragColor;
 		
 		float getMinDistToNearAtoms(){
 			float nearAtomDist;
 			vec3 nearAtomCoords;
 			float minDist = 255.0;
-			nearAtomDist = distance(nearAtomsCoords[0], pointPos) - nearAtomsColors[0].a; // 'nearAtomsColors[i].a' is the atom radius
+			nearAtomDist = distance(nearAtomsCoords[0], pointPos) - nearAtomsColors[0].a; // 'nearAtomsColors[i].a' is the atom radius ; currently set to 1.0
 			minDist = min(minDist, nearAtomDist);
 			nearAtomDist = distance(nearAtomsCoords[1], pointPos) - nearAtomsColors[1].a;
 			minDist = min(minDist, nearAtomDist);
@@ -558,38 +532,41 @@
 			if(minDist < 0.0) discard;
 			vec3 color = vIdColor.rgb;
 			if(distToCenter > 0.9) color = vec3(1.0);
-			// TODO: fix occlusion
-			//float occlusion = ( 2.0 * min( minDist , (0.5 * sizeMult) ) ); // cuttoff occlusion set to 0.5 the sphere's size
-			float occlusion = ( 0.5 * min( minDist , (2.0 * sizeMult) ) ); // cuttoff occlusion set to 2.0 the sphere's size
-			occlusion = 0.25 + 0.75 * occlusion; // darken 75% at max
-			gl_FragColor = vec4( color * occlusion , 1.0 );
+			//float occlusion = exp( -minDist ); // is 1 if distance is zero, and gradually decreases with distance ; value of 1 is maximum occlusion
+			//occlusion = (1.0 - 0.60 * occlusion); // set a maximum of 60% color darkening
+			float occlusion = ( 1.0 * min( minDist , 1.0 ) ); // only atoms closer than 1.0 contribute to occlusion ; value between 0 and 1
+			occlusion = 0.50 + 0.50 * occlusion; // darken 50% at max
+			glFragColor = vec4( color * occlusion , 1.0 );
 		}
 	</script>
 	<script id="debugReflectionFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform float sizeMult;
 		uniform vec3 cameraPosition;
-		varying vec3 rightVector;
-		varying vec3 upVector;
-		varying vec3 backVector;
-		varying vec3 cameraPos;
-		varying vec3 vPos;
-		varying vec4 vIdColor;
+		in vec3 rightVector;
+		in vec3 upVector;
+		in vec3 backVector;
+		in vec3 cameraPos;
+		in vec3 vPos;
+		in vec4 vIdColor;
 		
-		varying vec3 nearAtomsCoords[6];
-		varying vec4 nearAtomsColors[6];
+		in vec3 nearAtomsCoords[6];
+		in vec4 nearAtomsColors[6];
 		vec3 pointPos;
 		
 		float hitDistance;
-		vec3 hitColor;
+		vec4 hitColor;
 
-		float getMinDistToNearAtomsAndRelectionHit( vec3 vectorReflection ){
+		out vec4 glFragColor;
+
+		float getMinDistToNearAtomsAndReflectionHit(){
 			float nearAtomDist;
 			vec3 nearAtomCoords;
 			vec3 vectorPointToOtherAtom;
 			float minDist = 255.0;
 			hitDistance = 255.0;
-			hitColor = vec3( 0.0 , 0.0 , 0.0 , 1.0 );
+			hitColor = vec4( 0.0 , 0.0 , 0.0 , 1.0 );
 			vectorPointToOtherAtom = (nearAtomsCoords[0] - pointPos);
 			nearAtomDist = length(vectorPointToOtherAtom);
 
@@ -607,7 +584,6 @@
 			return minDist;
 		}
 
-
 		void main(){
 		
 			/* gl_PointCoord : top left = (0,0) ; bottom right = (1,1) */
@@ -623,7 +599,7 @@
 			pointPos += radius * posVector.x * rightVector;
 			pointPos += radius * posVector.y * upVector;
 			
-			float minDist = getMinDistToNearAtomsAndRelectionHit();
+			float minDist = getMinDistToNearAtomsAndReflectionHit();
 			if(minDist < 0.0) discard;
 
 			vec3 vectorCamToPoint = normalize( pointPos - cameraPos );
@@ -634,25 +610,28 @@
 			if(distToCenter > 0.9) color = vec3(1.0);
 			float occlusion = ( 2.0 * min( minDist , (0.5 * sizeMult) ) ); // cuttoff occlusion set to 0.5 the sphere's size
 			occlusion = 0.25 + 0.75 * occlusion; // darken 75% at max
-			gl_FragColor = vec4( color * occlusion , 1.0 );
+			glFragColor = vec4( color * occlusion , 1.0 );
 		}
 	</script>
 	<script id="debugDepthOfFieldFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform float sizeMult;
 		uniform vec3 cameraPosition;
-		varying vec3 rightVector;
-		varying vec3 upVector;
-		varying vec3 backVector;
-		varying vec3 cameraPos;
-		varying vec3 vPos;
-		varying vec4 vIdColor;
-		varying float vDepth;
+		in vec3 rightVector;
+		in vec3 upVector;
+		in vec3 backVector;
+		in vec3 cameraPos;
+		in vec3 vPos;
+		in vec4 vIdColor;
+		in float vDepth;
 		
-		varying vec3 nearAtomsCoords[6];
-		varying vec4 nearAtomsColors[6];
+		in vec3 nearAtomsCoords[6];
+		in vec4 nearAtomsColors[6];
 		vec3 pointPos;
 		
+		out vec4 glFragColor;
+
 		float getMinDistToNearAtoms(){
 			float nearAtomDist;
 			vec3 nearAtomCoords;
@@ -688,15 +667,16 @@
 			
 			float minDist = getMinDistToNearAtoms();
 			if(minDist < 0.0) discard;
-			gl_FragColor = vIdColor;
+			glFragColor = vIdColor;
 			float borderSize = 2.0 * abs( vDepth - 0.5 ); // distance to the middle of the viewport; 0.0 at middle and 1.0 at near/far
 			borderSize = max( 0.25 , 1.0 - borderSize ); // now 1.0 at middle and 0.25 at near/far
 			if(distToCenter > borderSize){
-				gl_FragColor.a = borderSize;
+				glFragColor.a = borderSize;
 			}
 		}
 	</script>
 	<script id="debugVolumeFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		/**/
 		uniform mat4 modelViewMatrix;
@@ -704,14 +684,15 @@
 		/**/
 		uniform float sizeMult;
 		uniform vec3 cameraPosition;
-		varying vec3 rightVector;
-		varying vec3 upVector;
-		varying vec3 backVector;
-		varying vec3 cameraPos;
-		varying float vId;
-		varying vec3 vPos;
-		varying vec3 vMvPos;
-		varying vec4 vIdColor;
+		in vec3 rightVector;
+		in vec3 upVector;
+		in vec3 backVector;
+		in vec3 cameraPos;
+		in float vId;
+		in vec3 vPos;
+		in vec3 vMvPos;
+		in vec4 vIdColor;
+		out vec4 glFragColor;
 		
 		vec4 floatToColor(in float x){
 			vec4 color = vec4(abs(x));
@@ -751,7 +732,7 @@
 			vec2 tex2Coord = vec2( mod(id, tex2Dim) , floor(id * tex2InvDim) );
 			tex2Coord.y += 0.5;
 			tex2Coord *= tex2InvDim;
-			return texture2D( tNearAtoms, tex2Coord ).x;
+			return texture( tNearAtoms, tex2Coord ).x;
 		}
 		vec3 getNearAtomCoords(float id){
 			float nearAtomId = (id + 0.5);
@@ -759,13 +740,13 @@
 			vec2 tex1Coord = vec2( mod(nearAtomId, tex1Dim) , floor(nearAtomId * tex1InvDim) );
 			tex1Coord.y += 0.5;
 			tex1Coord *= tex1InvDim;
-			return texture2D( tAtomsCoords, tex1Coord ).xyz;
+			return texture( tAtomsCoords, tex1Coord ).xyz;
 		}
 		*/
 
-		//varying float nearAtomsIds[6];
-		//varying float nearAtomsTypes[6];
-		varying vec3 nearAtomsCoords[6];
+		//in float nearAtomsIds[6];
+		//in float nearAtomsTypes[6];
+		in vec3 nearAtomsCoords[6];
 		vec3 pointPos;
 		
 		// TODO: when near atoms have different radius, update "nearAtomRadiusSquared" accordingly
@@ -776,7 +757,7 @@
 			vec3 nearAtomCoords;
 			float minDist = 255.0;
 			//float nearAtomRadiusSquared = (radius * radius); // (squared) radius of near atom
-			float nearAtomRadiusSquared = (1.0 * sizeMult);
+			float nearAtomRadiusSquared = (1.0 * sizeMult) * (1.0 * sizeMult);
 			nearAtomCoords = nearAtomsCoords[0];
 			nearAtomCoords -= pointPos;
 			nearAtomDist = dot(nearAtomCoords, nearAtomCoords);
@@ -811,13 +792,13 @@
 		}
 		void main() {
 
-			//gl_FragColor = vec3x2ToColor( vPos , getNearAtomCoords(vId) ); return;
+			//glFragColor = vec3x2ToColor( vPos , getNearAtomCoords(vId) ); return;
 			
 			/* gl_PointCoord : top left = (0,0) ; bottom right = (1,1) */
 			vec2 posVector = gl_PointCoord * 2.0 - 1.0; // gl_PointCoord between (0,0) and (1,1) ; new 'vector' centered at (0,0)
 			float distToCenter = length( posVector );
 			if(distToCenter > 1.0) discard; // outside circle
-			float elevation = sqrt( 1.0 - distToCenter * distToCenter ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
+			float elevation = sqrt( (1.0 * 1.0) - (distToCenter * distToCenter) ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
 			posVector.y *= (-1.0); // invert Y coord sign because gl_PointCoord.y grows from top to bottom and not the other way around
 
 			float radius = (1.0 * sizeMult); // assuming that the default radius of all the spheres is 1.0 world units
@@ -829,7 +810,7 @@
 			pointPos += radius * elevation * backVector;
 			pointPos += radius * posVector.x * rightVector;
 			pointPos += radius * posVector.y * upVector;
-			//gl_FragColor = floatToColor(length(pointPos - vPos)); return;
+			//glFragColor = floatToColor(length(pointPos - vPos)); return;
 
 			/*
 			vec4 mvpPointPos = projectionMatrix * modelViewMatrix * vec4( pointPos , 1.0 ); // get clip coordinates ; camera at (0,0)
@@ -837,24 +818,25 @@
 			mvpPointPos = (mvpPointPos + 1.0) * 0.5; // now in the range [0,1]
 			mvpPointPos.xy *= (resolution - 1.0); // convert to screen coordinates ; in the range from [0,0] to [(W-1),(H-1)]
 			mvpPointPos.xy += 0.5; // middle of the pixel
-			//gl_FragColor = floatToColor( distance( mvpPointPos.xy , gl_FragCoord.xy ) ); return;
+			//glFragColor = floatToColor( distance( mvpPointPos.xy , gl_FragCoord.xy ) ); return;
 			mvpPointPos -= gl_FragCoord;
-			gl_FragColor = vec4( abs( mvpPointPos.xy ) , 0.0 , 1.0 ); return;
+			glFragColor = vec4( abs( mvpPointPos.xy ) , 0.0 , 1.0 ); return;
 			*/
 			
 			checkDistsToNearAtoms(); // the fragment is discarded inside, if (minDist - radius) < 0.0
 			//if((minDist - radius) < 0.0) discard;
-			//gl_FragColor = float6ToColor(nearAtomsDists); return;
-			//gl_FragColor = floatToColor(minDist - radius); return;
+			//glFragColor = float6ToColor(nearAtomsDists); return;
+			//glFragColor = floatToColor(minDist - radius); return;
 			if(distToCenter > 0.9){
-				gl_FragColor = vec4(1.0); // white circle border
+				glFragColor = vec4(1.0); // white circle border
 				return;
 			}
-			//if((minDist - radius) < 0.0) gl_FragColor = vec4(1.0,0.0,0.0,1.0); else gl_FragColor = vec4(0.0,1.0,0.0,1.0); return;
-			gl_FragColor = vIdColor;
+			//if((minDist - radius) < 0.0) glFragColor = vec4(1.0,0.0,0.0,1.0); else gl_FragColor = vec4(0.0,1.0,0.0,1.0); return;
+			glFragColor = vIdColor;
 		}
 	</script>
 	<script id="debugTransformsFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		/**/
 		uniform mat4 modelViewMatrix;
@@ -862,13 +844,14 @@
 		/**/
 		uniform float sizeMult;
 		uniform vec3 cameraPosition;
-		varying vec3 rightVector;
-		varying vec3 upVector;
-		varying vec3 backVector;
-		varying vec3 cameraPos;
-		varying float vId;
-		varying vec3 vPos;
-		varying vec4 vIdColor;
+		in vec3 rightVector;
+		in vec3 upVector;
+		in vec3 backVector;
+		in vec3 cameraPos;
+		in float vId;
+		in vec3 vPos;
+		in vec4 vIdColor;
+		out vec4 glFragColor;
 		vec4 floatToColor(in float x){
 			vec4 color = vec4(abs(x));
 			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
@@ -925,45 +908,47 @@
 
 			/*
 			// NOTE: it's the same values
-			gl_FragColor = vec3x2ToColor( cameraPos , cameraPosition );
+			glFragColor = vec3x2ToColor( cameraPos , cameraPosition );
 			return;
 
 			// NOTE: all lengths are equal to 1.0
 			vec3 lengthVectors = vec3( length(rightVector) , length(upVector) , length(backVector) );
 			vec3 lengthCamVectors = vec3( length(camRight) , length(camUp) , length(camBack) );
-			gl_FragColor = vec3x2ToColor( lengthVectors , lengthCamVectors );
+			glFragColor = vec3x2ToColor( lengthVectors , lengthCamVectors );
 			return;
 
 			vec3 dotProds = vec3( dot(rightVector,camRight) , dot(upVector,camUp) , dot(backVector,camBack) );
 			vec3 crossProds = vec3( length(cross(rightVector,camRight)) , length(cross(upVector,camUp)) , length(cross(backVector,camBack)) );
-			gl_FragColor = vec3x2ToColor( dotProds , crossProds );
+			glFragColor = vec3x2ToColor( dotProds , crossProds );
 			return;
 			*/
 			
 			vec4 mvPos = modelViewMatrix * vec4( vPos , 1.0 ); // get eye/camera coordinates ; camera at (0,0)
-			gl_FragColor = vec3x2ToColor( mvPos.xyz ,  getPointInCameraCoords( vPos , cameraPosition , camBack , camUp ) );
+			glFragColor = vec3x2ToColor( mvPos.xyz ,  getPointInCameraCoords( vPos , cameraPosition , camBack , camUp ) );
 			return;
 
 			vec4 mvpPos = projectionMatrix * mvPos; // get clip coordinates 
 			mvpPos = mvpPos / (mvpPos.w); // get NDC coordinates ; in the range [-1,+1]
 			mvpPos = (mvpPos + 1.0) * 0.5; // now in the range [0,1]
-			gl_FragColor = vec3x2ToColor( mvpPos.xyz ,  getPointIn01Coords( mvPos.xyz ) ); return;
-			//gl_FragColor = floatToColor( distance( mvpPos.xyz , getPointIn01Coords( vMvPos ) ) ); return;
-			//gl_FragColor = vec4( abs( mvpPos.xyz - getPointIn01Coords( vMvPos ) ) , 1.0 ); return;
+			glFragColor = vec3x2ToColor( mvpPos.xyz ,  getPointIn01Coords( mvPos.xyz ) ); return;
+			//glFragColor = floatToColor( distance( mvpPos.xyz , getPointIn01Coords( vMvPos ) ) ); return;
+			//glFragColor = vec4( abs( mvpPos.xyz - getPointIn01Coords( vMvPos ) ) , 1.0 ); return;
 		}
 	</script>
 	<script id="debugVectorsFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		// Now declared as 'define's:
 		//uniform vec2 resolution;
 		uniform mat4 modelViewMatrix;
 		uniform mat4 projectionMatrix;
-		varying vec3 rightVector;
-		varying vec3 upVector;
-		varying vec3 backVector;
-		varying vec3 vPos;
-		varying float pointSize;
-		varying float vDepth;
+		in vec3 rightVector;
+		in vec3 upVector;
+		in vec3 backVector;
+		in vec3 vPos;
+		in float pointSize;
+		in float vDepth;
+		out vec4 glFragColor;
 		vec4 floatToColor(in float x){
 			vec4 color = vec4(abs(x));
 			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
@@ -1020,13 +1005,13 @@
 		void main() {
 			/* gl_PointCoord between (0,0) and (1,1) , from TOP-left corner to BOTTOM-right corner of quad (unlike gl_FragCoord!) */
 			if( max( abs(gl_PointCoord.x - 0.5) , abs(gl_PointCoord.y - 0.5) ) > 0.475 ){ // draw white squared border
-				gl_FragColor = vec4( vec3(vDepth) , 1.0); // greyed-out by linear depth
+				glFragColor = vec4( vec3(vDepth) , 1.0); // greyed-out by linear depth
 				return;
 			}
 			/* gl_FragCoord between (0,0) and ((width-1),(height-1)) , from BOTTOM-left corner to TOP-right corner of screen (unlike gl_PointCoord!) */
 			/* gl_FragCoord values include +(0.5,0.5) to fall in the middle of the pixel */
-			//gl_FragColor = vec3ToColor(gl_FragCoord.xyz);
-			//gl_FragColor = vec3ToColor(vectors[0].xyz);
+			//glFragColor = vec3ToColor(gl_FragCoord.xyz);
+			//glFragColor = vec3ToColor(vectors[0].xyz);
 			// convert all the coordinates into the range [-1,+1] (NDC coordinates), over a 2x2 square, to perform the calculations
 			vec2 fragCoord = ( gl_FragCoord.xy - vec2(0.5) ) / vec2( (resolution.x - 1.0) , (resolution.y - 1.0) ); // convert gl_FragCoord to range [0,1]x[0,1]
 			/*
@@ -1076,10 +1061,11 @@
 				color = vec3(0.0,0.0,1.0);
 				depth = vectors[3].z;
 			}
-			gl_FragColor = vec4( vDepth*color , 1.0 );
+			glFragColor = vec4( vDepth*color , 1.0 );
 		}
 	</script>
 	<script id="debugProximityFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform sampler2D tAtomsCoords;
 		uniform sampler2D tNearAtoms;
@@ -1087,8 +1073,9 @@
 		// Now declared as 'define's:
 		//uniform float tex1Dim;
 		//uniform float tex2Dim;
-		varying float vId;
-		varying vec3 vPos;
+		in float vId;
+		in vec3 vPos;
+		out vec4 glFragColor;
 		/*
 		// array initialization does not work in WebGL1; use defines (?) instead
 		const float elemsRadius[5] = float[5]( 1.20, 1.70, 1.55, 1.52, 1.80 ); // H,C,N,O,S
@@ -1137,12 +1124,12 @@
 			uv.x -= 1.0; // substract the extra +1 left on the mod because of the (id=vId*2+1) operation
 			uv += vec2(0.5); // +0.5 to fall in the middle of the texel
 			uv /= tex2Dim; // to convert to the range [0.0,1.0]
-			vec4 texel = texture2D( tNearAtoms, uv );
+			vec4 texel = texture( tNearAtoms, uv );
 			nearAtomsIds[0] = texel.x;
 			nearAtomsIds[1] = texel.y;
 			nearAtomsIds[2] = texel.z;
 			uv.x += 1.0/tex2Dim; // get the 2nd texel
-			texel = texture2D( tNearAtoms, uv );
+			texel = texture( tNearAtoms, uv );
 			nearAtomsIds[3] = texel.x;
 			nearAtomsIds[4] = texel.y;
 			nearAtomsIds[5] = texel.z;
@@ -1151,14 +1138,15 @@
 		void loadNearAtomsCoords(){
 			float naId;
 			vec2 uv;
-			#pragma unroll_loop
+			#pragma unroll_loop_start
 			for ( int i = 0; i < 6; i ++ ) {
 				naId = nearAtomsIds[ i ];
 				uv = vec2( mod(naId, tex1Dim) , floor(naId/tex1Dim) );
 				uv += vec2(0.5); // +0.5 to fall in the middle of the texel
 				uv /= tex1Dim; // to convert to the range [0.0,1.0]
-				nearAtomsCoords[ i ] = texture2D( tAtomsCoords, uv ).xyz;
+				nearAtomsCoords[ i ] = texture( tAtomsCoords, uv ).xyz;
 			}
+			#pragma unroll_loop_end
 		}
 		void getNearAtomsVals(){
 			nearAtomsDists[0][0] = distance(vPos, nearAtomsCoords[0]); // first 3 vals into the 1st vec3
@@ -1180,19 +1168,21 @@
 			loadNearAtomsIds();
 			loadNearAtomsCoords();
 			getNearAtomsVals();
-			//gl_FragColor = float6ToColor(nearAtomsIds);
-			gl_FragColor = vec3x2ToColor(nearAtomsDists);
-			//gl_FragColor = vec3x2ToColor(nearAtomsDotProds);
+			//glFragColor = float6ToColor(nearAtomsIds);
+			glFragColor = vec3x2ToColor(nearAtomsDists);
+			//glFragColor = vec3x2ToColor(nearAtomsDotProds);
 		}
 	</script>
 	<script id="debugTextureFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform sampler2D tAtomsCoords;
 		uniform sampler2D tNearAtoms;
 		// Now declared as 'define's:
 		//uniform float tex1Dim;
 		//uniform float tex2Dim;
-		varying float vId;
+		in float vId;
+		out vec4 glFragColor;
 		vec4 floatToColor(in float x){
 			vec4 color = vec4(abs(x));
 			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
@@ -1202,12 +1192,13 @@
 			color /= vec4(255.0);
 			return color;
 		}
-		vec4 tex3FloatsToColor(sampler2D texture, float texDim){ // divide point into 3 vertical slices and color each one according to the X,Y,Z coordinates of the atom id in the texture
+		/* TODO: use 'vec4 color = texelFetch(tex, ivec2(x, y), 0);' ; integer texel indices in [0,size-1] */
+		vec4 tex3FloatsToColor(sampler2D tex, float texDim){ // divide point into 3 vertical slices and color each one according to the X,Y,Z coordinates of the atom id in the texture
 			if( (abs(gl_PointCoord.x - 0.5) > 0.49) || (abs(gl_PointCoord.y - 0.5) > 0.49) ) return vec4(1.0);
 			vec2 uv = vec2( mod(vId, texDim) , floor(vId/texDim) );
 			uv += vec2(0.5); // +0.5 to fall in the middle of the texel
 			uv /= texDim; // to convert to the range [0.0,1.0]
-			vec4 texel = texture2D( texture, uv );
+			vec4 texel = texture( tex, uv );
 			//vec4 texel = vec4(uv,texDim,0.0);
 			float val = 0.0;
 			if( gl_PointCoord.x < (1.0/3.0) ) val = texel.x;
@@ -1215,7 +1206,7 @@
 			else val = texel.z;
 			return floatToColor(val);
 		}
-		vec4 tex6FloatsToColor(sampler2D texture, float texDim){ // divide point into 6 vertical slices and color each one according to the 6 values for the atom id in the texture (2 texels)
+		vec4 tex6FloatsToColor(sampler2D tex, float texDim){ // divide point into 6 vertical slices and color each one according to the 6 values for the atom id in the texture (2 texels)
 			if( (abs(gl_PointCoord.x - 0.5) > 0.49) || (abs(gl_PointCoord.y - 0.5) > 0.49) ) return vec4(1.0); // draw white border
 			float id = (vId*2.0) + 1.0; // (vId*2.0) because 2 texels are allocated for each atom ; (+1.0) otherwise mod(a,b) and floor(a,b) give wrong result when a=b (vId*2.0=tex2Dim)
 			vec2 uv = vec2( mod(id, texDim) , floor(id/texDim) );
@@ -1224,7 +1215,7 @@
 			else uv.x -= 1.0; // we are already on the 2nd texel, because of the (id=vId*2+1); on the 1st half, substract the +1
 			uv += vec2(0.5); // +0.5 to fall in the middle of the texel
 			uv /= texDim; // to convert to the range [0.0,1.0]
-			vec4 texel = texture2D( texture, uv );
+			vec4 texel = texture( tex, uv );
 			//vec4 texel = vec4((uv.x-1.0),uv.y,vId,0.0);
 			float val = 0.0;
 			if( x < (1.0/6.0) ) val = texel.x;
@@ -1233,15 +1224,17 @@
 			return floatToColor(val);
 		}
 		void main() {
-			//gl_FragColor = floatToColor(vId);
-			//gl_FragColor = tex3FloatsToColor(tAtomsCoords,tex1Dim);
-			gl_FragColor = tex6FloatsToColor(tNearAtoms,tex2Dim);
+			//glFragColor = floatToColor(vId);
+			//glFragColor = tex3FloatsToColor(tAtomsCoords,tex1Dim);
+			glFragColor = tex6FloatsToColor(tNearAtoms,tex2Dim);
 		}
 	</script>
 	<script id="debugMatrixFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		uniform mat4 modelViewMatrix; // to view its contents with the matrixToColor function
 		uniform mat4 projectionMatrix;
+		out vec4 glFragColor;
 		vec4 floatToColor(in float x){
 			vec4 color = vec4(abs(x));
 			color *= vec4( 1.0/256.0 , 1.0 , 256.0 , 65536.0 ); // 1-bit signal + 15-bit integer part (RG--) + 16-bit fractional part (--BA)
@@ -1271,68 +1264,82 @@
 			return floatToColor(val);
 		}
 		void main() {
-			gl_FragColor = matrixToColor(modelViewMatrix);
-			//gl_FragColor = matrixToColor(projectionMatrix);
-			//gl_FragColor = matrixToColor(projectionMatrix * modelViewMatrix);
+			glFragColor = matrixToColor(modelViewMatrix);
+			//glFragColor = matrixToColor(projectionMatrix);
+			//glFragColor = matrixToColor(projectionMatrix * modelViewMatrix);
 		}
 	</script>
 	<script id="debugZBufferVolumeFS" type="x-shader/x-fragment">
-		#extension GL_EXT_frag_depth : enable
+		//#version 300 es
+		//#extension GL_EXT_frag_depth : enable // NOTE: not required anymore in WebGL2
 		precision highp float;
-		varying vec4 vTestColor;
-		varying vec4 vIdColor;
-		varying float vSphereDepthChange;
+		in vec4 vTestColor;
+		in vec4 vIdColor;
+		in float vSphereDepthChange;
+		out vec4 glFragColor;
 		void main() {
 			/* gl_PointCoord between (0,0) and (1,1) */
 			float distToCenter = abs(length( gl_PointCoord * 2.0 - 1.0 )); // get length 'D' of vector between (-1,-1) and (+1,+1)
 			float elevation = sqrt( 1.0 - distToCenter * distToCenter ); // formula = sqrt( R^2 - D^2 ) ; between 1.0 and 0.0
 			/* depth value (gl_FragCoord.z) between 0.0 (close) and 1.0 (far) */
-			gl_FragDepthEXT = (gl_FragCoord.z - elevation * vSphereDepthChange);
+			//gl_FragDepthEXT = (gl_FragCoord.z - elevation * vSphereDepthChange); // NOTE: removed the 'EXT' suffix in WebGL2
+			gl_FragDepth = (gl_FragCoord.z - elevation * vSphereDepthChange);
 			if(distToCenter > 0.9){
 				if(distToCenter > 1.0) discard; // outside circle
-				gl_FragColor = vec4(1.0); // white circle border
+				glFragColor = vec4(1.0); // white circle border
 				return;
 			}
-			//gl_FragColor = vTestColor;
-			gl_FragColor = vIdColor;
-			//gl_FragColor = floatToColor(gl_FragCoord.z);
-			//gl_FragColor = floatToColor(elevation);
+			//glFragColor = vTestColor;
+			glFragColor = vIdColor;
+			//glFragColor = floatToColor(gl_FragCoord.z);
+			//glFragColor = floatToColor(elevation);
 		}
 	</script>
 	<script id="debugDepthFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
-		varying float vDepth;
+		in float vDepth;
+		out vec4 glFragColor;
 		void main() {
-			gl_FragColor = vec4( vec3(vDepth) , 1.0 ); // [ near=1.0 , far=0.0 ]
+			glFragColor = vec4( vec3(vDepth) , 1.0 ); // [ near=1.0 , far=0.0 ]
 		}
 	</script>
 	<script id="debugPtCoordsFS" type="x-shader/x-fragment">
+		//#version 300 es
+		precision highp float;
+		out vec4 glFragColor;
 		void main() {
 			/* gl_PointCoord varies from (0,0) to (1,1) ; from top-left corner to bottom-right corner of quad (unlike gl_FragCoord!) */
-			gl_FragColor = vec4( gl_PointCoord.x , gl_PointCoord.y , 1.0 , 1.0 );
+			glFragColor = vec4( gl_PointCoord.x , gl_PointCoord.y , 1.0 , 1.0 );
 		}
 	</script>
 	<script id="debugScrCoordsFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
 		// now declared as a define
 		//uniform vec2 resolution;
+		out vec4 glFragColor;
 		void main() {
 			/* gl_FragCoord varies from (0,0) to (width-1,height-1) ; from bottom-left corner to top-right corner of screen (unlike gl_PointCoord!) */
-			gl_FragColor = vec4( 1.0 , gl_FragCoord.x / resolution.x , gl_FragCoord.y / resolution.y , 1.0 );
+			glFragColor = vec4( 1.0 , gl_FragCoord.x / resolution.x , gl_FragCoord.y / resolution.y , 1.0 );
 		}
 	</script>
 	<script id="debugPosFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
-		varying vec4 vPosColor;
+		in vec4 vPosColor;
+		out vec4 glFragColor;
 		void main() {
-			gl_FragColor = vPosColor;
+			glFragColor = vPosColor;
 		}
 	</script>
 	<script id="debugIdFS" type="x-shader/x-fragment">
+		//#version 300 es
 		precision highp float;
-		varying vec4 vIdColor;
+		in vec4 vIdColor;
+		out vec4 glFragColor;
 		void main() {
-			gl_FragColor = vIdColor;
+			glFragColor = vIdColor;
 		}
 	</script>
 
@@ -1503,7 +1510,7 @@
 					vertices[3] = 0.0;
 					vertices[4] = 0.0;
 					vertices[5] = 0.0;
-					geometry.addAttribute( 'position', new THREE.BufferAttribute( vertices, 3 ) );
+					geometry.setAttribute( 'position', new THREE.BufferAttribute( vertices, 3 ) );
 					material = new THREE.LineBasicMaterial( { color: colors[k] } );
 					lines.add( new THREE.Line( geometry, material) );
 				}
@@ -1818,12 +1825,16 @@
 						console.log(window.performance);
 						console.log(renderer.info);
 						console.log(renderer.capabilities);
+						/*
 						console.log(renderer.extensions.get('WEBGL_draw_buffers'));
 						console.log(renderer.extensions.get('EXT_frag_depth'));
 						console.log(renderer.extensions.get('OES_texture_float'));
 						console.log(renderer.extensions.get('OES_texture_half_float'));
 						console.log(renderer.extensions.get('OES_element_index_uint'));
 						console.log(renderer.extensions.get('WEBGL_debug_renderer_info'));
+						*/
+						console.log(renderer.extensions.get('EXT_color_buffer_float')); // check if we are able to render to a floating point texture
+						console.log(renderer.extensions.get('EXT_color_buffer_half_float')); // does the corresponding 'half_float' version exist too?
 						console.log(renderer.getContextAttributes());
 						console.log(renderer.getContext().getSupportedExtensions());
 					} );
@@ -1903,16 +1914,57 @@
 				setShadersRendering();
 			}
 
+			// Function 'toHalf' from link bellow, to convert JS 'Float32' to JS 'Uint16' and enable using 'THREE.Float16BufferAttribute' instead of Float32 version
+			// ref: http://stackoverflow.com/questions/32633585/how-do-you-convert-to-half-floats-in-javascript
+			function toHalf(val) {
+				/* This method is faster than the OpenEXR implementation (very often
+				* used, eg. in Ogre), with the additional benefit of rounding, inspired
+				* by James Tursa?s half-precision code. */
+				var floatView = new Float32Array(1);
+				var int32View = new Int32Array(floatView.buffer);
+				floatView[0] = val;
+				var x = int32View[0];
+				var bits = (x >> 16) & 0x8000; /* Get the sign */
+				var m = (x >> 12) & 0x07ff; /* Keep one extra bit for rounding */
+				var e = (x >> 23) & 0xff; /* Using int is faster here */
+				/* If zero, or denormal, or exponent underflows too much for a denormal
+				* half, return signed zero. */
+				if (e < 103) {
+					return bits;
+				}
+				/* If NaN, return NaN. If Inf or exponent overflow, return Inf. */
+				if (e > 142) {
+					bits |= 0x7c00;
+					/* If exponent was 0xff and one mantissa bit was set, it means NaN,
+					* not Inf, so make sure we set one mantissa bit too. */
+					bits |= ((e == 255) ? 0 : 1) && (x & 0x007fffff);
+					return bits;
+				}
+				/* If exponent underflows but not too much, return a denormal */
+				if (e < 113) {
+					m |= 0x0800;
+					/* Extra rounding may overflow and set mantissa to 0 and exponent
+					* to 1, which is OK. */
+					bits |= (m >> (114 - e)) + ((m >> (113 - e)) & 1);
+					return bits;
+				}
+				bits |= ((e - 112) << 10) | (m >> 1);
+				/* Extra rounding. An overflow will set mantissa to 0 and increment
+				* the exponent, which is OK. */
+				bits += m & 1;
+				return bits;
+			};
+
 			function createDataTextures(){
 				"use strict";
 				//var textureNearNeighbors, textureFarNeighbors;
 				var data, width, height, size, i, j;
 				
+				/* TODO: To speed up calculations in the FS, create square texture, but with size of a power of two */
 				width = Math.ceil( Math.sqrt(numPdbAtoms) ); // create square texture
 				height = width;
 				size = width * height * 4; // 4 values (coordinates x, y, z and element type w) for each atom ; format: THREE.RGBAFormat
 				data = new Float32Array(size); // it would be enough to use a "Float16Array", but it does not exist in Javascript
-				var elements = "HCNOS";
 				/* Texture: AtomCoordinates */
 				j = 0;
 				for (i = 0; i != numPdbAtoms; i++){
@@ -1923,6 +1975,9 @@
 				}
 				while(j != size) data[j++] = 0.0;
 				/* TODO: use THREE.HalfFloatType here instead: convert floats to "IEEE 754 (binary16)" format and store in a "UInt16Array" */
+				/* TODO: in pure WebGL we can use "RGBA16F" format */
+				/* Check here: https://webgl2fundamentals.org/webgl/lessons/webgl-data-textures.html */
+				/* And here: https://stackoverflow.com/questions/57699322/webgl2-render-uint16array-to-canvas-as-an-image */
 				textureAtomCoordinates = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
 				textureAtomCoordinates.needsUpdate = true;
 				texture1StrideSize = width;
@@ -1956,7 +2011,7 @@
 				"use strict";
 				materials = {};
 
-				// TODO: instead of using attribute "id", enable Indexed Rendering and use "gl_VertexID"  (and benchmark change!)
+				// TODO: instead of using attribute "id", enable Indexed Rendering and use "gl_VertexID" (and benchmark change!)
 				// TODO: instead of using attributes "color" and "size", use define'd array of element properties
 				pointVS_start = `
 					precision highp float;
@@ -1966,13 +2021,13 @@
 
 					uniform float sizeMult;
 
-					attribute vec3 position;
-					attribute vec3 color;
-					attribute float size;
+					in vec3 position;
+					in vec3 color;
+					in float size;
 
-					varying vec4 vColor;
-					varying float vLinearDepth;
-					varying float vDepthChange;
+					out vec4 vColor;
+					out float vLinearDepth;
+					out float vDepthChange;
 
 					void main() {
 						/* position relative to camera; camera at (0,0,0) facing -Z axis */
@@ -2004,16 +2059,15 @@
 
 				// TODO: Create "Unified Shader" with "#ifdef"'s
 				pointFS_start = `
-					#extension GL_EXT_frag_depth : enable
-
 					precision highp float;
 
-					varying vec4 vColor;
-					varying float vLinearDepth;
-					varying float vDepthChange;
+					in vec4 vColor;
+					in float vLinearDepth;
+					in float vDepthChange;
+					out vec4 glFragColor;
 
 					void main() {
-						gl_FragColor = vColor;
+						glFragColor = vColor;
 						/* gl_PointCoord between (0,0) and (1,1) */
 						float distanceFromCenter = 2.0 * distance( gl_PointCoord , vec2(0.5, 0.5) );
 				`;
@@ -2022,22 +2076,23 @@
 				pointFS_middle['Size'] = ``;
 				pointFS_middle['Color'] = ``;
 				pointFS_middle['Shape'] = `if( distanceFromCenter > 1.0 ) discard;`;
-				pointFS_middle['Border'] = `if( distanceFromCenter > 0.975 ) gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);`;
-				pointFS_middle['Shade'] = `gl_FragColor = gl_FragColor * ( (1.0 - distanceFromCenter) + 0.25 );`;
+				pointFS_middle['Border'] = `if( distanceFromCenter > 0.975 ) glFragColor = vec4(0.0, 0.0, 0.0, 1.0);`;
+				pointFS_middle['Shade'] = `glFragColor = glFragColor * ( (1.0 - distanceFromCenter) + 0.25 );`;
 				pointFS_middle['Fog'] = `
 					/* depth value (gl_FragCoord.z) between 0.0 (close) and 1.0 (far) */
 					/* only apply fog on the farthest range , with linearDepth > 0.5 */
 					float fogVal = 1.0 - max(0.0, vLinearDepth - 0.5) * 2.0;
-					gl_FragColor = gl_FragColor * vec4( vec3(fogVal) , 1.0 );
+					glFragColor = glFragColor * vec4( vec3(fogVal) , 1.0 );
 				`;
 				pointFS_middle['Depth'] = `
 					/* formula = sqrt( R^2 - D^2 ) ; R = radius, D = distanceFromCenter ; value between 1.0 and 0.0 */
 					float elevation = sqrt( 1.0 - distanceFromCenter * distanceFromCenter ); 
 					/* depth value (gl_FragCoord.z) between 0.0 (close) and 1.0 (far) */
-					gl_FragDepthEXT = (gl_FragCoord.z - elevation * vDepthChange);
+					gl_FragDepth = (gl_FragCoord.z - elevation * vDepthChange);
 				`;
 
 				materials['shader'] = new THREE.RawShaderMaterial( {
+					glslVersion: THREE.GLSL3, // Adds string '#version 300 es' to the beggining of the shaders' code
 					defines: {
 						CAMERA_NEAR:	(camera.near).toFixed(1),
 						CAMERA_FAR:		(camera.far).toFixed(1),
@@ -2068,6 +2123,7 @@
 				*/
 
 				materials['debug'] = new THREE.RawShaderMaterial( {
+					glslVersion: THREE.GLSL3,
 					defines: {
 						// color (3xfloats) and radius (1xfloat) for elements H,C,N,O,S
 						"elemsProps_0":	"vec4(1.00,1.00,1.00, 1.20)",
@@ -2180,10 +2236,24 @@
 				var geometry;
 				var sprite, defines, uniforms;
 				var elem;
+				/*
 				var positions = [];
 				var colors = [];
 				var sizes = [];
 				var ids = [];
+				*/
+				/*
+				var positions = new Uint16Array(3*numPdbAtoms);
+				var colors = new Uint16Array(3*numPdbAtoms);
+				var sizes = new Uint16Array(numPdbAtoms);
+				var ids = new Uint32Array(numPdbAtoms);
+				*/
+				/**/
+				var positions = new Float32Array(3*numPdbAtoms);
+				var colors = new Float32Array(3*numPdbAtoms);
+				var sizes = new Float32Array(numPdbAtoms);
+				var ids = new Uint32Array(numPdbAtoms);
+				/**/
 
 				var color = new THREE.Color();
 				geometry = new THREE.BufferGeometry();
@@ -2194,19 +2264,44 @@
 						console.log(pdbAtoms[i]);
 						continue;
 					}
-					positions.push( pdbAtoms[i].x , pdbAtoms[i].y , pdbAtoms[i].z );
 					color.set( elementProperties[elem].color );
+					/*
 					colors.push( color.r , color.g , color.b );
 					sizes.push( elementProperties[elem].radius );
+					positions.push( pdbAtoms[i].x , pdbAtoms[i].y , pdbAtoms[i].z );
 					ids.push( i );
+					*/
+					/*
+					// Use 'Uint16Array' in JS to enable using 'Float16BufferAttribute' in Three.js
+					positions[3*i+0] = toHalf(pdbAtoms[i].x);
+					positions[3*i+1] = toHalf(pdbAtoms[i].y);
+					positions[3*i+2] = toHalf(pdbAtoms[i].z);
+					colors[3*i+0] = toHalf(color.r);
+					colors[3*i+1] = toHalf(color.g);
+					colors[3*i+2] = toHalf(color.b);
+					sizes[i] = toHalf(elementProperties[elem].radius);
+					ids[i] = i;
+					*/
+					/**/
+					positions[3*i+0] = (pdbAtoms[i].x);
+					positions[3*i+1] = (pdbAtoms[i].y);
+					positions[3*i+2] = (pdbAtoms[i].z);
+					colors[3*i+0] = (color.r);
+					colors[3*i+1] = (color.g);
+					colors[3*i+2] = (color.b);
+					sizes[i] = (elementProperties[elem].radius);
+					ids[i] = i;
+					/**/
 				}
-				geometry.addAttribute( 'position', new THREE.Float32BufferAttribute( positions, 3 ) );
+				/* TODO: use 'THREE.Float16BufferAttribute' here -> does not work even when using 'Uint16Array' JS typed arrays */
+				geometry.setAttribute( 'position', new THREE.Float32BufferAttribute( positions, 3 ) );
 				/* TODO: replace 'color' and 'size' attributes by defines by element (from textureAtomElements array) */
-				geometry.addAttribute( 'color', new THREE.Float32BufferAttribute( colors, 3 ) );
-				geometry.addAttribute( 'size', new THREE.Float32BufferAttribute( sizes, 1 ) );
+				/* TODO: replace by 'type' and use 'THREE.Uint8BufferAttribute' here */
+				geometry.setAttribute( 'color', new THREE.Float32BufferAttribute( colors, 3 ) );
+				geometry.setAttribute( 'size', new THREE.Float32BufferAttribute( sizes, 1 ) );
 				/* TODO: replace 'id' attribute by "gl_VertexID" variable inside shader, by enabling Indexed Rendering (and benchmark change!) */
-				//geometry.addAttribute( 'id', new THREE.Uint32BufferAttribute( ids, 1 ) );
-				geometry.addAttribute( 'id', new THREE.Float32BufferAttribute( ids, 1 ) );
+				//geometry.setAttribute( 'id', new THREE.Uint32BufferAttribute( ids, 1 ) );
+				geometry.setAttribute( 'id', new THREE.Float32BufferAttribute( ids, 1 ) );
 				
 				sprite = generateSphereSprite();
 				//sprite = new THREE.TextureLoader().load( "./ball.png" );
@@ -2220,9 +2315,10 @@
 					//time: { value: 1.0 },
 					//resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
 					sizeMult: { value: initialPointSize },
-					texture: { value: sprite }
+					pointTexture: { value: sprite }
 				};
 				materials['basic'] = new THREE.RawShaderMaterial( {
+					glslVersion:	THREE.GLSL3, // set 'version' string
 					defines:		defines,
 					uniforms:		uniforms,
 					vertexShader:	document.getElementById( 'pointVertexShader' ).textContent,
@@ -2279,7 +2375,7 @@
 				// NOTE: 'alpha' required to read the pixels' 8-bit alpha channel
 				renderer = new THREE.WebGLRenderer({ antialias: false , depth: true , alpha: true , preserveDrawingBuffer: false });
 				renderer.setSize(window.innerWidth, window.innerHeight);
-				renderer.extensions.get('EXT_frag_depth');
+				//renderer.extensions.get('EXT_frag_depth'); // NOTE: Not supported anymore in latest THREE.js versions
 				document.body.appendChild(renderer.domElement);
 				raycaster = new THREE.Raycaster();
 				mouse = new THREE.Vector2();
